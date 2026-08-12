@@ -1,7 +1,40 @@
 services:
   - type: web
-    name: codecopilot-backend
-    env: python
+    name: vantage-backend
+    runtime: python
+    plan: free
     buildCommand: pip install -r requirements.txt
-    startCommand: python app.py
-    
+    # v2 pointed at "app.py", which has never existed in this repo — the deploy
+    # could not have started. Uvicorn is invoked directly rather than through
+    # gunicorn: uvicorn.workers.UvicornWorker is deprecated since uvicorn 0.30,
+    # and uvicorn manages workers natively.
+    # Migrations run first and always exit 0: a bad revision must leave the
+    # previous schema serving rather than stop the service booting.
+    # /api/health reports the schema state so it degrades visibly, not silently.
+    startCommand: python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+    healthCheckPath: /api/health
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: PYTHON_VERSION
+        value: "3.12.4"
+      # Analysis holds an extracted repository on disk; give it room.
+      - key: MAX_EXTRACTED_BYTES
+        value: "524288000"
+      # Set these in the Render dashboard, not here.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      # Sign-in. Optional as a group — with none of them set the service runs
+      # exactly as before and /api/health says sign-in is unconfigured.
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: INTERNAL_API_SECRET
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
