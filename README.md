@@ -1,0 +1,231 @@
+# Vantage — API
+
+Static analysis for repositories. Fetches a GitHub repository (or accepts a ZIP),
+runs a rule engine over it, and returns a scored report where every finding is
+anchored to a file and line.
+
+FastAPI · Python 3.12 · SQLAlchemy 2 (async) · Postgres.
+
+The web client lives in a sibling repository,
+[`vantage-frontend`](https://github.com/Asmodeus14/vantage-frontend).
+
+---
+
+## Running locally
+
+Requires **Python 3.12+**.
+
+```bash
+python -m venv menv
+menv/Scripts/activate            # Linux/macOS: source menv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env             # every variable is optional — see below
+python -m uvicorn app.main:app --reload --port 5000
+```
+
+Interactive API docs at <http://127.0.0.1:5000/docs>.
+
+**If you set `DATABASE_URL`, apply migrations first:**
+
+```bash
+python -m app.migrate            # or: alembic upgrade head
+```
+
+Alembic owns the schema on Postgres. `create_all` still runs for SQLite and for
+the no-database path, but never for Postgres — letting both manage the schema
+would race, with `create_all` creating a table a pending revision is about to
+create itself.
+
+### It runs with no configuration at all
+
+Every external dependency is optional, and each absence is reported by
+`/api/health` rather than hidden:
+
+| Missing | Effect |
+|---|---|
+| `GEMINI_API_KEY` | Analysis is unaffected. AI actions are disabled **with the reason shown**. No canned text is ever substituted for a model response. |
+| `DATABASE_URL` | Reports are held in a bounded in-memory LRU and lost on restart. This is a working fallback, not a stub. |
+| `GITHUB_TOKEN` | Anonymous GitHub access: 60 requests/hour. Commit-history enrichment spends one request per file carrying a finding, so a couple of analyses can exhaust it — the Activity panel then degrades to `partial` and says why. |
+| Sign-in variables | Sign-in is reported unconfigured, naming exactly which variables are missing. Public repositories still analyse. |
+
+---
+
+## Configuration
+
+All of it is read in `app/config.py` and nowhere else — no other module calls
+`os.getenv`. Defaults shown are the code's own.
+
+### Core
+
+| Variable | Default | Notes |
+|---|---|---|
+| `ENVIRONMENT` | `development` | `development` \| `production` |
+| `LOG_LEVEL` | `INFO` | |
+| `CORS_ORIGINS` | `http://localhost:3000,…` | Comma-separated. Kept as a string deliberately: pydantic-settings parses list-typed env vars as JSON, which is a persistently surprising failure mode. |
+| `DATABASE_URL` | — | Postgres via **asyncpg**: `postgresql+asyncpg://user:pass@host/db` |
+
+### AI
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GEMINI_API_KEY` | — | From [AI Studio](https://aistudio.google.com/apikey) |
+| `GEMINI_MODEL` | `gemini-3.6-flash` | Free-tier quota is **per model**, not per key. On repeated 429s, switching model is usually faster than waiting for the reset. |
+| `AI_TIMEOUT_SECONDS` | `90.0` | Current flash models reason before answering; 30s was measured to be too tight. |
+| `AI_CIRCUIT_FAILURE_THRESHOLD` | `3` | Consecutive failures before the circuit opens. |
+| `AI_CIRCUIT_COOLDOWN_SECONDS` | `120.0` | How long it stays open. |
+
+### GitHub
+
+| Variable | Default | Notes |
+|---|---|---|
+| `GITHUB_TOKEN` | — | 60 → 5000 requests/hour, and reaches private repositories. |
+| `GITHUB_TIMEOUT_SECONDS` | `60.0` | |
+
+### Sign-in
+
+Optional as a group; all three are required together, plus `DATABASE_URL`.
+See [Sign-in](#sign-in) for what each one is for and why the client secret is
+absent from this list.
+
+| Variable | Notes |
+|---|---|
+| `GITHUB_CLIENT_ID` | From your OAuth App. Must match the frontend's value. |
+| `INTERNAL_API_SECRET` | Authenticates the *frontend server* to this API. Not a user credential. **Must match the frontend exactly.** |
+| `TOKEN_ENCRYPTION_KEY` | Fernet key encrypting stored GitHub tokens at rest. Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"` |
+| `SESSION_TTL_DAYS` | Default `30`. |
+
+### Limits and analysis
+
+| Variable | Default |
+|---|---|
+| `MAX_ARCHIVE_BYTES` | `262144000` (250 MB) |
+| `MAX_EXTRACTED_BYTES` | `524288000` (500 MB) |
+| `MAX_FILE_BYTES` | `8388608` (8 MB) |
+| `MAX_FILE_COUNT` | `30000` |
+| `MAX_COMPRESSION_RATIO` | `20.0` |
+| `MAX_PATH_DEPTH` | `24` |
+| `ANALYSIS_TIMEOUT_SECONDS` | `180.0` |
+| `MAX_FINDINGS` | `500` |
+| `OSV_ENABLED` | `true` — setting this false **disables vulnerability scanning entirely** |
+| `OSV_TIMEOUT_SECONDS` | `30.0` |
+
+---
+
+## API
+
+Full schema at `/docs`. Summary:
+
+| Method | Path | Notes |
+|---|---|---|
+| `GET` | `/api/health` | Never calls the model. Reports AI, database, schema and sign-in state. |
+| `POST` | `/api/analyze/repository` | Returns `{job_id}` immediately (202). Rate limited 20/hr. |
+| `POST` | `/api/analyze/upload` | Multipart ZIP. 10/hr. |
+| `GET` | `/api/analyze/{job_id}/events` | Server-Sent Events: real per-stage progress. |
+| `GET` | `/api/analyze/{job_id}` | Polling fallback. |
+| `GET` | `/api/reports` | `?limit=`, `?repository=`. **Scoped to the caller** — see [Ownership](#ownership). |
+| `GET` | `/api/reports/{id}` | Anyone holding the id may read it. |
+| `DELETE` | `/api/reports/{id}` | Owner only. |
+| `POST` | `/api/reports/{id}/findings/{finding_id}/ai` | Closed action enum. 30/hr. |
+| `GET` | `/api/auth/status` | Whether sign-in can be offered, and why not. |
+| `POST` | `/api/auth/session` | Server-to-server; guarded by `INTERNAL_API_SECRET`. |
+| `GET` | `/api/auth/me` | Current user. |
+| `POST` | `/api/auth/logout` | Ends this session. Idempotent. |
+| `POST` | `/api/auth/logout-everywhere` | Ends all sessions for the account. |
+
+---
+
+## Sign-in
+
+Optional. It buys three things: reports become owned, so the history listing
+stops showing every caller the index of everyone's analyses; analyses spend the
+signed-in user's 5000/hour GitHub budget instead of the server's shared 60; and
+private repositories become analysable if the user separately grants `repo`.
+
+### The split-secret contract
+
+The two halves hold **different** secrets, and getting this wrong is the most
+likely deployment mistake:
+
+| Secret | Backend | Frontend |
+|---|---|---|
+| `GITHUB_CLIENT_ID` | ✓ | ✓ (same value) |
+| `GITHUB_CLIENT_SECRET` | ✗ — deliberately never read here | ✓ |
+| `INTERNAL_API_SECRET` | ✓ | ✓ (**must match**) |
+| `TOKEN_ENCRYPTION_KEY` | ✓ | ✗ |
+| `SESSION_SECRET` | ✗ | ✓ |
+
+The OAuth code exchange happens on the frontend server, so the client secret
+never needs to exist here. This API never sets a cookie — it receives a session
+token as `Authorization: Bearer` and resolves it. The reason is in the
+frontend's architecture notes: a cookie set by this API would be third-party in
+production and blocked outright by Safari and Firefox strict mode.
+
+If only one side is configured, `/api/auth/status` and the frontend's
+`/api/auth/me` both report unconfigured, so a sign-in button is never offered
+for a flow that would fail at the last step.
+
+### Ownership
+
+| Report | Reachable by id | Appears in the listing | Deletable |
+|---|---|---|---|
+| Anonymous | yes | only when signed out | no |
+| Owned | yes | for its owner only | by its owner |
+
+Report ids are `secrets.token_urlsafe(9)`, so "reachable by id" is an
+unguessable capability rather than an open door — that is what makes a report
+link shareable. *Listing* is the part that has to be scoped.
+
+Anonymous reports cannot be deleted through the API at all: there is no account
+to authorise against, and allowing it would turn an unguessable id into a
+destructive capability held by anyone it was ever shared with.
+
+---
+
+## Testing
+
+```bash
+python -m pytest -q                              # 172 tests
+python -m pytest --collect-only -q | tail -1     # current count
+```
+
+The suite runs against an **unconfigured** service: `tests/conftest.py` has an
+autouse fixture that blanks the six ambient environment variables and clears the
+settings cache. Without it the suite depends on whose machine it runs on —
+configuring GitHub sign-in locally once made four unrelated tests fail.
+
+Coverage worth knowing about:
+
+- `test_archive_safety.py` — path traversal for **ZIP and tar**, symlinks and
+  special files, decompression bombs, size/count/depth caps
+- `test_prompts.py` — sentinel fencing, injection containment, output validation
+- `test_ai_provider.py` — circuit breaker semantics, no I/O at construction
+- `test_auth.py` — the ownership matrix, token encryption, key rotation
+- `test_history.py` — the `Link: rel="last"` page-count trick, GitHub's
+  `202`-while-computing response, rate-limit degradation
+
+---
+
+## Deployment
+
+`render.yaml` is committed. The start command runs migrations before uvicorn and
+**always exits 0** — a bad revision leaves the previous schema serving rather
+than stopping the service booting, and `/api/health` reports
+`database.migrations: behind` so the degradation is visible rather than silent.
+
+Set in the dashboard (all marked `sync: false`): `GEMINI_API_KEY`,
+`DATABASE_URL`, `GITHUB_TOKEN`, `CORS_ORIGINS`, `GITHUB_CLIENT_ID`,
+`INTERNAL_API_SECRET`, `TOKEN_ENCRYPTION_KEY`.
+
+Free tiers sleep when idle. The client reports a waking backend rather than
+appearing hung.
+
+---
+
+## Documentation
+
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module layout, the rule
+  engine, persistence, and the security model
+
+## Licence
+
+MIT.
