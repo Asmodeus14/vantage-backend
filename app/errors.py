@@ -52,6 +52,18 @@ class RepositoryFetchError(VantageError):
     code = "repository_fetch_failed"
 
 
+class PrivateRepositoryError(VantageError):
+    """Refused: a private repository, requested by someone anonymous.
+
+    403 rather than 404. Hiding the repository's existence would be pointless —
+    the caller already knows the name they typed — and a clear refusal tells
+    them the actionable thing, which is to sign in.
+    """
+
+    status_code = 403
+    code = "private_repository"
+
+
 class RepositoryNotFoundError(VantageError):
     status_code = 404
     code = "repository_not_found"

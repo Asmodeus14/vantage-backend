@@ -287,6 +287,132 @@ async def test_an_unavailable_source_explains_itself_over_http(api):
     assert "re-analyse" in response.json()["detail"].lower()
 
 
+"""Private repositories"""
+
+
+async def test_ingestion_refuses_a_private_repository_for_anonymous_callers(monkeypatch):
+    """Defence in depth against a mis-scoped server token.
+
+    Anonymous callers fall back to the server's credentials. If that token could
+    reach private repositories, without this check any visitor could analyse
+    someone's private code and then read whole files through the viewer.
+    """
+    import httpx
+
+    from app.errors import PrivateRepositoryError
+    from app.ingest.github import GitHubCredentials, RepositoryRef, fetch_repository
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict = {}
+
+        def json(self):
+            return {"private": True, "default_branch": "main", "size": 10}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):
+            return FakeResponse()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+    ref = RepositoryRef("acme", "secret")
+
+    for credentials in (
+        None,
+        GitHubCredentials(token="x", source="server"),
+        GitHubCredentials(source="anonymous"),
+    ):
+        with pytest.raises(PrivateRepositoryError) as exc:
+            await fetch_repository(ref, Path("."), settings(), credentials)
+        assert "sign in" in (exc.value.detail or "").lower()
+        assert exc.value.status_code == 403
+
+
+async def test_a_signed_in_user_may_still_analyse_their_own_private_repository(
+    monkeypatch, tmp_path
+):
+    """The guard must not break the flow it exists to protect. Someone who
+    granted `repo` has already proved to GitHub that they can see it."""
+    import httpx
+
+    from app.errors import PrivateRepositoryError
+    from app.ingest.github import GitHubCredentials, RepositoryRef, fetch_repository
+
+    class FakeResponse:
+        status_code = 200
+        headers: dict = {}
+
+        def json(self):
+            return {"private": True, "default_branch": "main", "size": 10}
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+        async def get(self, url, **kwargs):
+            return FakeResponse()
+
+        def stream(self, *args, **kwargs):
+            raise RuntimeError("reached the download, so the guard let it through")
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kwargs: FakeClient())
+
+    with pytest.raises(RuntimeError, match="guard let it through"):
+        await fetch_repository(
+            RepositoryRef("acme", "secret"),
+            tmp_path,
+            settings(),
+            GitHubCredentials(token="u", source="user"),
+        )
+
+
+async def test_the_viewer_refuses_private_source_to_anonymous_callers(api, snapshot):
+    """A report id is a read capability for the *report*. Findings quote a few
+    lines; this serves whole files, so sharing the link must not hand over the
+    source of a private repository."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    report = make_report("r1", repository="acme/secret")
+    report.source = SourceInfo(
+        kind=SourceKind.REPOSITORY,
+        repository="acme/secret",
+        ref="main",
+        commit="abc123",
+        private=True,
+    )
+    await api.reports.save(report)
+
+    with TestClient(app) as client:
+        for path in ("/api/reports/r1/files", "/api/reports/r1/file?path=a.py"):
+            response = client.get(path)
+            assert response.status_code == 403, path
+            assert "private" in response.json()["message"].lower()
+
+
+async def test_a_public_report_is_still_readable_by_anyone(api, snapshot):
+    """The guard must not touch the ordinary case — a shared report link is the
+    whole point of an unguessable id."""
+    from fastapi.testclient import TestClient
+    from app.main import app
+
+    report = make_report("r1", repository=None)
+    report.source = SourceInfo(kind=SourceKind.UPLOAD, filename="project.zip")
+    await api.reports.save(report)
+    await api.blobs.put("r1", snapshot)
+
+    with TestClient(app) as client:
+        assert client.get("/api/reports/r1/files").status_code == 200
+
+
 """Wider context for AI actions"""
 
 

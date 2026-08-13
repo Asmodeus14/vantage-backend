@@ -193,6 +193,7 @@ class AnalysisRunner:
                 ref=fetched.resolved_ref,
                 commit=fetched.commit,
                 url=repository.html_url,
+                private=fetched.private,
             )
             await self._analyse(
                 job,

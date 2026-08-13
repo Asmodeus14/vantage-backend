@@ -197,6 +197,16 @@ class SourceInfo(BaseModel):
     commit: str | None = None
     url: str | None = None
     filename: str | None = Field(default=None, description="For uploads.")
+    private: bool = Field(
+        default=False,
+        description=(
+            "The repository was private when analysed. Recorded so the file "
+            "viewer can refuse an anonymous read without asking GitHub again. "
+            "False on reports created before this was tracked, which is "
+            "accurate for them: analysing a private repository anonymously was "
+            "not possible through the normal path."
+        ),
+    )
 
 
 class IngestStats(BaseModel):

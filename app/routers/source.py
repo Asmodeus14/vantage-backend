@@ -16,7 +16,7 @@ from pathlib import PurePosixPath
 
 from fastapi import APIRouter, Depends, Query
 
-from app.auth.dependencies import current_user
+from app.auth.dependencies import NotAuthorised, current_user
 from app.auth.store import AuthenticatedUser
 from app.config import Settings, get_settings
 from app.errors import VantageError
@@ -43,6 +43,30 @@ class SourceNotAvailableError(VantageError):
     code = "source_unavailable"
 
 
+def _guard_private(report, user: AuthenticatedUser | None) -> None:
+    """Only someone who can already see a private repository may read its files.
+
+    A report id is an unguessable *read* capability, which is what makes a
+    report shareable — but the findings quote a few lines while this serves
+    whole files. Sharing the link to a private analysis should not hand over the
+    source.
+
+    Uses the flag recorded at analysis time rather than asking GitHub, so it
+    costs nothing and still works when the rate limit is exhausted.
+    """
+    if not report.source.private:
+        return
+    if user is not None:
+        return
+    raise NotAuthorised(
+        "This report is of a private repository.",
+        detail=(
+            "Sign in to read its files. The report itself stays readable to "
+            "anyone holding the link; its source does not."
+        ),
+    )
+
+
 @router.get("/{report_id}/files", response_model=SourceTree)
 async def list_files(
     report_id: str,
@@ -50,6 +74,7 @@ async def list_files(
     user: AuthenticatedUser | None = Depends(current_user),
 ) -> SourceTree:
     report = await get_store().get(report_id)
+    _guard_private(report, user)
     try:
         provider = provider_for(report, settings, _credentials_for(user, settings))
         entries = await provider.tree()
@@ -88,6 +113,7 @@ async def read_file(
     round-trip would mean the markers arrive after the code.
     """
     report = await get_store().get(report_id)
+    _guard_private(report, user)
     try:
         provider = provider_for(report, settings, _credentials_for(user, settings))
         content = await provider.read(path)

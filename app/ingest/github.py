@@ -20,6 +20,7 @@ from app.config import Settings
 from app.errors import (
     ArchiveTooLargeError,
     InvalidRepositoryError,
+    PrivateRepositoryError,
     RateLimitedError,
     RepositoryFetchError,
     RepositoryNotFoundError,
@@ -70,6 +71,9 @@ class FetchedRepository:
     commit: str | None
     description: str | None
     default_branch: str
+    # Recorded so the file viewer can refuse an anonymous read without spending
+    # another API call asking GitHub what it already learned here.
+    private: bool = False
 
 
 def parse_repository_url(value: str) -> RepositoryRef:
@@ -190,6 +194,27 @@ async def fetch_repository(
         _raise_for_status(meta_response, ref, settings)
         meta = meta_response.json()
 
+        is_private = bool(meta.get("private"))
+        # Defence in depth against a deployment mistake.
+        #
+        # Anonymous callers fall back to the *server's* token. If that token can
+        # reach private repositories — a classic `repo` PAT rather than a
+        # public-only fine-grained one — then without this check any visitor
+        # could analyse someone's private code and then read whole files through
+        # the viewer. Scoping the token correctly prevents that; this stops the
+        # code depending on it having been done.
+        #
+        # Costs nothing: `meta` is already fetched.
+        if is_private and (credentials is None or credentials.source != "user"):
+            raise PrivateRepositoryError(
+                f"{ref.full_name} is private.",
+                detail=(
+                    "Sign in with GitHub and grant private repository access to "
+                    "analyse it. This server will not read private code for "
+                    "someone who has not shown they can already see it."
+                ),
+            )
+
         default_branch = meta.get("default_branch") or "main"
         resolved_ref = ref.ref or default_branch
 
@@ -254,4 +279,5 @@ async def fetch_repository(
         commit=commit,
         description=meta.get("description"),
         default_branch=default_branch,
+        private=is_private,
     )
