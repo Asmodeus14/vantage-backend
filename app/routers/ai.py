@@ -21,6 +21,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, Request
 
 from app.ai.prompts import (
+    MAX_CONTEXT_LINES,
     AIAction,
     CodeContext,
     OutputRejected,
@@ -28,10 +29,15 @@ from app.ai.prompts import (
     validate_output,
 )
 from app.ai.provider import LLMProvider, provider_dependency
+from app.auth.dependencies import current_user
+from app.auth.store import AuthenticatedUser
 from app.config import Settings, get_settings
 from app.errors import AIUnavailableError, VantageError, ReportNotFoundError
+from app.ingest.github import GitHubCredentials
 from app.limiter import limiter
-from app.schemas import AIActionRequest, AIActionResponse, Finding
+from app.routers.analyze import _credentials_for
+from app.schemas import AIActionRequest, AIActionResponse, Finding, Report
+from app.source import SourceUnavailable, provider_for
 from app.store import get_store
 
 logger = logging.getLogger(__name__)
@@ -69,14 +75,76 @@ def _language_of(path: str | None) -> str | None:
     return detect_language(PurePosixPath(path))
 
 
-def _context_for(finding: Finding, repository: str) -> CodeContext:
+async def _wider_source(
+    report: Report,
+    finding: Finding,
+    settings: Settings,
+    credentials: GitHubCredentials | None,
+) -> tuple[str, int, int] | None:
+    """A window of the real file around a finding, or ``None`` to keep the snippet.
+
+    Findings carry ±3 lines, which is why *Propose fix* so often answered
+    ``INSUFFICIENT_CONTEXT``: three lines rarely contain the imports, the
+    surrounding function and the conventions a correct patch has to match.
+    Now that source can be read after the fact, it is read.
+
+    Centred on the finding rather than taken from the top of the file.
+    ``clamp_context`` truncates from the start, so a window that overflowed
+    would lose the very lines the finding points at.
+
+    Best-effort by design: a rate-limited GitHub or a deleted repository must
+    degrade to the snippet, not fail the action.
+    """
+    if not finding.file or not finding.line:
+        return None
+
+    try:
+        provider = provider_for(report, settings, credentials)
+        text = await provider.read(finding.file)
+    except SourceUnavailable as exc:
+        logger.info("Wider context unavailable for %s: %s", finding.id, exc.reason)
+        return None
+    except Exception:
+        logger.exception("Could not widen context for %s", finding.id)
+        return None
+
+    lines = text.split("\n")
+    if not lines:
+        return None
+
+    start = max(1, finding.line)
+    end = max(start, finding.end_line or start)
+    span = end - start + 1
+
+    if span >= MAX_CONTEXT_LINES:
+        first = start
+    else:
+        # Centre the finding in the window, then clamp to the file's bounds.
+        pad = (MAX_CONTEXT_LINES - span) // 2
+        first = max(1, start - pad)
+    last = min(len(lines), first + MAX_CONTEXT_LINES - 1)
+    first = max(1, min(first, last))
+
+    return "\n".join(lines[first - 1 : last]), first, last
+
+
+def _context_for(
+    finding: Finding, repository: str, wider: tuple[str, int, int] | None
+) -> CodeContext:
+    if wider is not None:
+        code, first, last = wider
+    else:
+        code = finding.snippet or "(no source captured for this finding)"
+        first = finding.snippet_start_line or finding.line or 1
+        last = finding.end_line or finding.line or 1
+
     return CodeContext(
         repository=repository,
         file_path=finding.file or "(project-wide)",
         language=_language_of(finding.file),
-        start_line=finding.snippet_start_line or finding.line or 1,
-        end_line=finding.end_line or finding.line or 1,
-        code=finding.snippet or "(no source captured for this finding)",
+        start_line=first,
+        end_line=last,
+        code=code,
         finding_title=finding.title,
         finding_description=finding.description,
         finding_severity=finding.severity.value,
@@ -84,14 +152,23 @@ def _context_for(finding: Finding, repository: str) -> CodeContext:
     )
 
 
-def _describe_context(finding: Finding, repository: str) -> str:
-    """Shown in the UI so the user knows exactly what the model was given."""
+def _describe_context(
+    finding: Finding, repository: str, wider: tuple[str, int, int] | None
+) -> str:
+    """Shown in the UI so the user knows exactly what the model was given.
+
+    It has to reflect what was *actually* sent, including whether the wider
+    read succeeded — otherwise it claims context the model never saw.
+    """
+    if wider is not None:
+        _, first, last = wider
+        return f"{repository} · {finding.file} · lines {first}–{last}"
     if finding.file and finding.line:
         span = (
             f"lines {finding.snippet_start_line or finding.line}–"
             f"{finding.end_line or finding.line}"
         )
-        return f"{repository} · {finding.file} · {span}"
+        return f"{repository} · {finding.file} · {span} (snippet only)"
     return f"{repository} · project-wide finding"
 
 
@@ -107,6 +184,7 @@ async def run_ai_action(
     body: AIActionRequest,
     settings: Settings = Depends(get_settings),
     provider: LLMProvider = Depends(provider_dependency),
+    user: Optional[AuthenticatedUser] = Depends(current_user),
 ) -> AIActionResponse:
     status = provider.status()
     if not status.available:
@@ -135,8 +213,11 @@ async def run_ai_action(
     repository = (
         report.source.repository or report.source.filename or "uploaded archive"
     )
+    wider = await _wider_source(
+        report, finding, settings, _credentials_for(user, settings)
+    )
     action = AIAction(body.action)
-    built = build_prompt(action, _context_for(finding, repository))
+    built = build_prompt(action, _context_for(finding, repository, wider))
 
     raw = await provider.complete(built.user, system=built.system)
 
@@ -155,7 +236,7 @@ async def run_ai_action(
         action=body.action,
         output=output,
         model=status.model,
-        context=_describe_context(finding, repository),
+        context=_describe_context(finding, repository, wider),
         cached=False,
     )
     _cache_put(cache_key, response)

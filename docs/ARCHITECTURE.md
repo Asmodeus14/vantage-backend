@@ -215,6 +215,29 @@ private, the commit was force-pushed away, the upload predates blob storage —
 each is a different situation with a different remedy, and "unavailable" tells
 nobody anything they can act on.
 
+### The AI router reads through it too
+
+`_wider_source` gives the model a `MAX_CONTEXT_LINES` window of the real file
+instead of the finding's ±3-line snippet. Three lines rarely contain the
+imports, the surrounding function and the conventions a correct patch has to
+match, which is why *Propose fix* so often refused.
+
+The window is **centred on the finding**, not taken from the top of the file:
+`clamp_context` truncates from the start, so a window that overflowed would
+lose the very lines the finding points at.
+
+Best-effort. A rate-limited GitHub or a deleted repository falls back to the
+snippet rather than failing the action, and `AIActionResponse.context` says
+which happened — it reads "lines 1–99" or "lines 8–14 (snippet only)", because
+a UI claiming context the model never saw is worse than no label.
+
+**This does not make every finding fixable, and should not be described as if
+it did.** `quality/long-file` on a 1,187-line file still answers
+`INSUFFICIENT_CONTEXT`, correctly: you cannot split a file you have seen an
+eighth of. That is not a context bug — "split this file" is not a diff-shaped
+answer, and raising the cap would inflate cost and dilute attention for every
+other action to chase a case that would still fail.
+
 ---
 
 ## Accepted findings

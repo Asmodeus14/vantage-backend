@@ -190,7 +190,7 @@ destructive capability held by anyone it was ever shared with.
 ## Testing
 
 ```bash
-python -m pytest -q                              # 244 tests
+python -m pytest -q                              # 250 tests
 python -m pytest --collect-only -q | tail -1     # current count
 ```
 

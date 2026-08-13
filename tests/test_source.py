@@ -287,6 +287,113 @@ async def test_an_unavailable_source_explains_itself_over_http(api):
     assert "re-analyse" in response.json()["detail"].lower()
 
 
+"""Wider context for AI actions"""
+
+
+class FakeProvider:
+    def __init__(self, text: str | None) -> None:
+        self._text = text
+
+    async def tree(self):  # pragma: no cover - not used here
+        return []
+
+    async def read(self, path: str) -> str:
+        if self._text is None:
+            raise SourceUnavailable("gone")
+        return self._text
+
+
+async def widen(monkeypatch, finding, text: str | None):
+    from app.ai.prompts import MAX_CONTEXT_LINES  # noqa: F401
+    from app.routers import ai as ai_module
+
+    monkeypatch.setattr(
+        ai_module, "provider_for", lambda *a, **k: FakeProvider(text)
+    )
+    report = make_report("r1", repository="acme/app")
+    return await ai_module._wider_source(report, finding, settings(), None)
+
+
+async def test_ai_context_is_widened_from_the_real_file(monkeypatch):
+    """A ±3-line snippet is why Propose fix so often answered
+    INSUFFICIENT_CONTEXT: three lines rarely hold the imports and the
+    surrounding function a correct patch has to match."""
+    from tests.test_api_flow import make_finding
+
+    text = "\n".join(f"line {i}" for i in range(1, 401))
+    finding = make_finding(id="f1", file="src/a.ts", line=200, end_line=200)
+
+    result = await widen(monkeypatch, finding, text)
+
+    assert result is not None
+    code, first, last = result
+    assert first < 200 < last, "the finding should sit inside the window"
+    assert len(code.split("\n")) > 50, "much wider than the snippet"
+    assert "line 200" in code
+
+
+async def test_the_window_is_centred_so_clamping_cannot_cut_the_finding(monkeypatch):
+    """`clamp_context` truncates from the start, so a window running off the
+    end would lose the very lines the finding points at."""
+    from app.ai.prompts import MAX_CONTEXT_LINES
+    from tests.test_api_flow import make_finding
+
+    text = "\n".join(f"line {i}" for i in range(1, 1001))
+    finding = make_finding(id="f1", file="src/a.ts", line=500, end_line=500)
+
+    code, first, last = await widen(monkeypatch, finding, text)
+
+    assert last - first + 1 <= MAX_CONTEXT_LINES
+    assert first < 500 < last
+    # Roughly centred, so the finding survives any later truncation.
+    assert abs((500 - first) - (last - 500)) <= 2
+
+
+async def test_a_finding_at_the_top_of_a_file_still_gets_a_full_window(monkeypatch):
+    from app.ai.prompts import MAX_CONTEXT_LINES
+    from tests.test_api_flow import make_finding
+
+    text = "\n".join(f"line {i}" for i in range(1, 1001))
+    finding = make_finding(id="f1", file="src/a.ts", line=1, end_line=1)
+
+    code, first, last = await widen(monkeypatch, finding, text)
+
+    assert first == 1
+    assert last == MAX_CONTEXT_LINES
+
+
+async def test_unavailable_source_falls_back_to_the_snippet(monkeypatch):
+    """A rate-limited GitHub or a deleted repository must degrade, not fail the
+    action — the snippet still produces a useful explanation."""
+    from tests.test_api_flow import make_finding
+
+    finding = make_finding(id="f1", file="src/a.ts", line=10)
+    assert await widen(monkeypatch, finding, None) is None
+
+
+async def test_a_project_wide_finding_is_not_widened(monkeypatch):
+    """There is no file to read, and inventing one would be worse than the
+    honest "(no source captured)"."""
+    from tests.test_api_flow import make_finding
+
+    finding = make_finding(id="f1", file=None, line=None)
+    assert await widen(monkeypatch, finding, "irrelevant") is None
+
+
+def test_the_reported_context_says_when_only_the_snippet_was_used():
+    """The UI shows this so someone knows what the model actually saw. It must
+    not claim context that was never sent."""
+    from app.routers.ai import _describe_context
+    from tests.test_api_flow import make_finding
+
+    finding = make_finding(id="f1", file="src/a.ts", line=10, end_line=10)
+
+    assert "snippet only" in _describe_context(finding, "acme/app", None)
+    assert "lines 5–120" in _describe_context(
+        finding, "acme/app", ("code", 5, 120)
+    )
+
+
 @pytest.mark.parametrize(
     "status,expected",
     [
