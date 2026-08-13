@@ -167,6 +167,22 @@ async def test_store_round_trips_a_report(in_memory):
     assert loaded.source.repository == "a/b"
 
 
+async def test_reading_a_report_cannot_scribble_on_the_store(in_memory):
+    """The Postgres store returns a freshly validated object every read, so this
+    one must too. Handing out the stored instance let a request handler mutate
+    it — marking suppressed findings on read persisted, and unsuppressing then
+    appeared to do nothing until a restart."""
+    await in_memory.save(make_report("r1"))
+
+    loaded = await in_memory.get("r1")
+    loaded.findings[0].suppressed = True
+    loaded.suppressed_count = 99
+
+    fresh = await in_memory.get("r1")
+    assert fresh.findings[0].suppressed is False
+    assert fresh.suppressed_count == 0
+
+
 async def test_missing_report_explains_the_memory_backend(in_memory):
     from app.errors import ReportNotFoundError
 

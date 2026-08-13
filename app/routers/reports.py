@@ -16,16 +16,29 @@ Owned                yes               for its owner only      by its owner
 Ids are ``secrets.token_urlsafe(9)``, so "reachable by id" is an unguessable
 capability, not an open door. Listing is the part that has to be scoped: before
 this, ``GET /api/reports`` handed every caller the index of everyone's analyses.
+
+Suppressions follow the same shape: reading a report applies its *owner's*
+accepted findings, so a shared link means one thing to everyone, while
+*changing* them requires being that owner.
 """
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
+from app.analysis.scoring import compute_score
 from app.auth.dependencies import NotAuthorised, current_user
 from app.auth.store import AuthenticatedUser
-from app.schemas import Report, ReportSummary
+from app.errors import ReportNotFoundError
+from app.schemas import (
+    Finding,
+    Report,
+    ReportSummary,
+    Suppression,
+    SuppressionRequest,
+)
 from app.store import get_store
+from app.suppressions import get_suppression_store, new_suppression
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -47,11 +60,165 @@ async def list_reports(
     )
 
 
+async def _apply_suppressions(report: Report, owner_id: str | None) -> Report:
+    """Mark accepted findings and recompute the score without them.
+
+    The *owner's* suppressions are applied, not the viewer's, so a shared link
+    shows one thing to everyone who opens it. The alternative — filtering per
+    viewer — means two people discussing the same URL are looking at different
+    reports, which is worse than the mild oddity of seeing someone else's
+    judgement.
+
+    Findings are marked rather than removed. Dropping them would leave
+    ``suppressed_count`` unverifiable and make "show suppressed" a second
+    round-trip.
+    """
+    repository = report.source.repository
+    if owner_id is None or repository is None:
+        return report
+
+    entries = await get_suppression_store().list(owner_id, repository)
+    if not entries:
+        return report
+
+    reasons = {entry.fingerprint: entry.reason for entry in entries}
+    suppressed = 0
+    for finding in report.findings:
+        if finding.fingerprint and finding.fingerprint in reasons:
+            finding.suppressed = True
+            finding.suppression_reason = reasons[finding.fingerprint] or None
+            suppressed += 1
+
+    report.suppressed_count = suppressed
+    if suppressed:
+        # `score` stays exactly what the analysis produced; this is an addition,
+        # not an edit. Recomputed on read so removing a suppression takes effect
+        # without re-analysing.
+        report.effective_score = compute_score(
+            [f for f in report.findings if not f.suppressed],
+            report.project.analysed_files,
+        )
+    return report
+
+
 @router.get("/{report_id}", response_model=Report)
-async def get_report(report_id: str) -> Report:
+async def get_report(
+    report_id: str,
+    user: AuthenticatedUser | None = Depends(current_user),
+) -> Report:
     """Anyone holding the id may read it — that is what makes a report link
     shareable, and the id is unguessable."""
-    return await get_store().get(report_id)
+    store = get_store()
+    report = await store.get(report_id)
+    owner_id = await store.owner_of(report_id)
+
+    report = await _apply_suppressions(report, owner_id)
+    # Varies by viewer, unlike the rest of the report: it exists so the UI can
+    # omit an action that would only ever be refused.
+    report.can_suppress = (
+        user is not None
+        and owner_id == user.id
+        and report.source.repository is not None
+    )
+    return report
+
+
+@router.get("/{report_id}/suppressions", response_model=list[Suppression])
+async def list_suppressions(
+    report_id: str,
+    user: AuthenticatedUser | None = Depends(current_user),
+) -> list[Suppression]:
+    """Everything the caller has accepted for this report's repository.
+
+    Scoped to the caller rather than the report owner: this is the editable
+    list, and offering someone a list they cannot act on is worse than not
+    offering it.
+    """
+    report = await get_store().get(report_id)
+    if user is None or report.source.repository is None:
+        return []
+    return await get_suppression_store().list(user.id, report.source.repository)
+
+
+async def _owned_finding(
+    report_id: str, finding_id: str, user: AuthenticatedUser | None
+) -> tuple[Report, Finding]:
+    """The report must be the caller's, and the finding must be in it."""
+    store = get_store()
+    report = await store.get(report_id)
+
+    if user is None or await store.owner_of(report_id) != user.id:
+        raise NotAuthorised(
+            "That report isn't yours to change.",
+            detail=(
+                "Accepting a finding records who accepted it, so it needs an "
+                "account — and reports created without signing in have no owner "
+                "to check against."
+            ),
+        )
+
+    if report.source.repository is None:
+        raise NotAuthorised(
+            "Findings from an uploaded archive cannot be accepted.",
+            detail=(
+                "An acceptance carries forward to future analyses of the same "
+                "repository. An upload has no stable identity to carry it to."
+            ),
+        )
+
+    finding = next((f for f in report.findings if f.id == finding_id), None)
+    if finding is None:
+        raise ReportNotFoundError("No finding with that id in this report.")
+    if not finding.fingerprint:
+        raise NotAuthorised(
+            "This finding predates stable identity and cannot be accepted.",
+            detail=(
+                "It comes from a report analysed before findings carried a "
+                "fingerprint, so an acceptance could not be matched on a "
+                "re-run. Re-analyse the repository and accept it there."
+            ),
+        )
+    return report, finding
+
+
+@router.put("/{report_id}/findings/{finding_id}/suppression", status_code=204)
+async def suppress_finding(
+    report_id: str,
+    finding_id: str,
+    body: SuppressionRequest,
+    user: AuthenticatedUser | None = Depends(current_user),
+) -> None:
+    """Accept a finding, for every analysis of this repository.
+
+    ``PUT`` rather than ``POST``: accepting an already-accepted finding updates
+    the reason and is otherwise a no-op, which is exactly idempotent.
+    """
+    report, finding = await _owned_finding(report_id, finding_id, user)
+    assert user is not None and report.source.repository is not None
+    await get_suppression_store().add(
+        user.id,
+        report.source.repository,
+        new_suppression(
+            fingerprint=finding.fingerprint,
+            reason=body.reason,
+            title=finding.title,
+            rule_id=finding.rule_id,
+        ),
+    )
+
+
+@router.delete("/{report_id}/findings/{finding_id}/suppression", status_code=204)
+async def unsuppress_finding(
+    report_id: str,
+    finding_id: str,
+    user: AuthenticatedUser | None = Depends(current_user),
+) -> None:
+    """Restore a finding. Takes effect on the next read, with no re-analysis."""
+    report, finding = await _owned_finding(report_id, finding_id, user)
+    assert user is not None and report.source.repository is not None
+    await get_suppression_store().remove(
+        user.id, report.source.repository, finding.fingerprint
+    )
 
 
 @router.delete("/{report_id}", status_code=204)

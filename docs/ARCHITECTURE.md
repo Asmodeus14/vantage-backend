@@ -171,6 +171,59 @@ that makes every legacy finding equal to every other.
 
 ---
 
+## Accepted findings
+
+A scanner reporting the same forty-seven unchanging low-severity findings on
+every run teaches people to stop reading the list, which quietly removes the
+value of the two that mattered. `suppressions.py` is the escape hatch, and it
+only became possible once fingerprints were stable — a suppression keyed on
+anything volatile would silently lapse on the next run.
+
+The key is `(owner_id, repository, fingerprint)`:
+
+- **Fingerprint, not report id.** A suppression is a statement about a problem,
+  not about one analysis of it, so it carries forward to every future run.
+- **Per repository.** "This hardcoded key is a test fixture" is true of one
+  project, not of every project the account analyses.
+- **Requires an account.** An unattributable judgement cannot be reviewed or
+  revoked by whoever has to live with it. Uploads are refused for the same
+  reason the diff refuses them: no stable identity to carry the acceptance to.
+
+Applied when a report is **read**, so removing a suppression restores the
+finding immediately rather than needing a re-analysis. Findings are *marked*,
+never dropped — removing them would leave `suppressed_count` unverifiable and
+turn "show accepted" into a second round-trip.
+
+### Whose suppressions, and what happens to the score
+
+Reading a report applies its **owner's** suppressions, for every viewer.
+Filtering per viewer would mean two people discussing the same URL are looking
+at different reports, which is worse than the mild oddity of seeing someone
+else's judgement. Changing them still requires *being* that owner, so the
+unguessable id stays a read capability and never becomes an edit one.
+
+`score` is always what the analysis produced and never changes. `effective_score`
+is it recomputed with accepted findings excluded, present only when some are.
+Both are sent, and the UI leads with the effective one while keeping the
+original on screen — a score that silently absorbed its own exceptions would be
+unfalsifiable.
+
+Because the *owner's* suppressions apply for everyone, the effective score is
+still the same number for every viewer at any given moment. It moves over time
+as the owner accepts and restores, which is the trade accepted when choosing to
+let suppressions affect the score at all.
+
+`can_suppress` is the one field on a report that varies by caller. It exists so
+the UI can omit an action that would only ever be refused.
+
+**Known inconsistency:** `GET /api/reports` returns summaries built from indexed
+columns and never deserialises the payload, which is what keeps listing cheap —
+so History and the trend chart show the score *as analysed*, not as adjusted.
+Fixing it means persisting the effective score and recomputing it across a
+repository's reports whenever a suppression changes.
+
+---
+
 ## Commit history
 
 `ingest/history.py` reads commit activity from the GitHub REST API. It cannot

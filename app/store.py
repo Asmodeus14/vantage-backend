@@ -143,7 +143,12 @@ class InMemoryReportStore:
                     "kept in memory and cleared when it restarts."
                 ),
             )
-        return report
+        # A copy, because the Postgres store returns a freshly validated object
+        # and these two must not behave differently. Handing out the stored
+        # instance let a request handler scribble on it: marking suppressed
+        # findings on read persisted into the store, so unsuppressing appeared
+        # to do nothing until a restart.
+        return report.model_copy(deep=True)
 
     async def list(
         self,

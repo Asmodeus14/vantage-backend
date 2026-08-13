@@ -93,6 +93,19 @@ class Finding(BaseModel):
     remediation: str | None = Field(default=None, description="What to do about it.")
     references: list[str] = Field(default_factory=list, description="URLs / CVE ids.")
 
+    suppressed: bool = Field(
+        default=False,
+        description=(
+            "Accepted by the report's owner. Set when the report is read, never "
+            "stored — so removing a suppression restores the finding without "
+            "re-analysing. The finding is still returned; hiding it entirely "
+            "would make the count unverifiable."
+        ),
+    )
+    suppression_reason: str | None = Field(
+        default=None, description="Why it was accepted, in the owner's words."
+    )
+
     @property
     def is_located(self) -> bool:
         return self.file is not None and self.line is not None
@@ -257,6 +270,29 @@ class RepositoryActivity(BaseModel):
     )
 
 
+class Suppression(BaseModel):
+    """A finding the owner has accepted, for one repository.
+
+    ``title`` and ``rule_id`` are denormalised copies so a suppression stays
+    readable — and revocable — after the report it was created from is gone.
+    """
+
+    fingerprint: str
+    reason: str = ""
+    title: str = ""
+    rule_id: str = ""
+    created_at: datetime
+
+
+class SuppressionRequest(BaseModel):
+    reason: str = Field(
+        default="",
+        max_length=500,
+        description="Optional, but the point of the feature is that someone can "
+        "later ask why this was accepted.",
+    )
+
+
 class ResolvedFinding(BaseModel):
     """A finding present in the previous report and absent from this one.
 
@@ -323,6 +359,31 @@ class Report(BaseModel):
             "Every rule that ran, including those that found nothing. Needed to "
             "tell 'this rule is new' from 'this rule ran clean last time' — "
             "deriving the set from findings cannot distinguish the two."
+        ),
+    )
+    suppressed_count: int = Field(
+        default=0,
+        description=(
+            "How many findings the owner has accepted. Always reported, so "
+            "suppressed findings are never *silently* gone."
+        ),
+    )
+    can_suppress: bool = Field(
+        default=False,
+        description=(
+            "Whether *this caller* may accept findings here — signed in, owns "
+            "the report, and it came from a repository. Unlike everything else "
+            "on the report this varies by viewer, so that the UI can omit a "
+            "control that would only ever be refused."
+        ),
+    )
+    effective_score: Score | None = Field(
+        default=None,
+        description=(
+            "The score recomputed with suppressed findings excluded. Present "
+            "only when suppressions apply; `score` is always what the analysis "
+            "produced and never changes. Computed on read, so it reflects the "
+            "suppressions as they are now, not as they were at analysis time."
         ),
     )
     delta: FindingDelta | None = Field(

@@ -124,7 +124,10 @@ Full schema at `/docs`. Summary:
 | `GET` | `/api/analyze/{job_id}/events` | Server-Sent Events: real per-stage progress. |
 | `GET` | `/api/analyze/{job_id}` | Polling fallback. |
 | `GET` | `/api/reports` | `?limit=`, `?repository=`. **Scoped to the caller** — see [Ownership](#ownership). |
-| `GET` | `/api/reports/{id}` | Anyone holding the id may read it. |
+| `GET` | `/api/reports/{id}` | Anyone holding the id may read it. Applies the **owner's** accepted findings, so a shared link means one thing to everyone. |
+| `PUT` | `/api/reports/{id}/findings/{finding_id}/suppression` | Accept a finding for every analysis of that repository. Owner only; idempotent. |
+| `DELETE` | `/api/reports/{id}/findings/{finding_id}/suppression` | Restore it. Takes effect on the next read, with no re-analysis. |
+| `GET` | `/api/reports/{id}/suppressions` | What **the caller** has accepted for this repository. |
 | `DELETE` | `/api/reports/{id}` | Owner only. |
 | `POST` | `/api/reports/{id}/findings/{finding_id}/ai` | Closed action enum. 30/hr. |
 | `GET` | `/api/auth/status` | Whether sign-in can be offered, and why not. |
@@ -185,7 +188,7 @@ destructive capability held by anyone it was ever shared with.
 ## Testing
 
 ```bash
-python -m pytest -q                              # 198 tests
+python -m pytest -q                              # 214 tests
 python -m pytest --collect-only -q | tail -1     # current count
 ```
 
