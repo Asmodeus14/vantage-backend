@@ -23,6 +23,41 @@ DANGEROUS_HTML = re.compile(r"dangerouslySetInnerHTML")
 ARRAY_INDEX_KEY = re.compile(r"\bkey\s*=\s*\{\s*(?:index|idx|i)\s*\}")
 
 
+# A JSX element opening: `<div`, `<Button`, `<>`, `</`. Deliberately not a bare
+# `<`, which also matches a less-than comparison.
+JSX_ELEMENT = re.compile(r"<[A-Za-z][\w.]*[\s/>]|<>|</")
+
+# How far a callback may run before we stop following it. Long enough for a
+# realistic list item, short enough that a runaway scan cannot read the file.
+MAX_CALLBACK_LINES = 40
+
+
+def _callback_body(lines: list[str], start: int, column: int) -> str:
+    """The text of the `.map(...)` call beginning at ``start``:``column``.
+
+    Walks forward by paren depth from the call's own opening bracket, so the
+    result is the callback and nothing after it.
+    """
+    depth = 0
+    opened = False
+    out: list[str] = []
+
+    for offset in range(0, min(MAX_CALLBACK_LINES, len(lines) - start)):
+        text = lines[start + offset]
+        piece = text[column:] if offset == 0 else text
+        for char in piece:
+            if char in "([{":
+                depth += 1
+                opened = True
+            elif char in ")]}":
+                depth -= 1
+        out.append(piece)
+        if opened and depth <= 0:
+            break
+
+    return "\n".join(out)
+
+
 def _is_jsx_file(source) -> bool:
     if source.language not in JSX_LANGUAGES:
         return False
@@ -53,13 +88,25 @@ class MissingKeyRule:
             cleaned = strip_comments_and_strings(text, source.language).splitlines()
 
             for index, line in enumerate(cleaned):
-                if not MAP_CALL.search(line):
+                match = MAP_CALL.search(line)
+                if not match:
                     continue
-                # A key may appear on the same line or in the returned element
-                # a few lines below; inspect the local window only.
-                window = "\n".join(cleaned[index : index + 6])
-                if "<" not in window:
-                    continue  # not rendering JSX
+
+                # The callback's own extent, found by paren depth — not a fixed
+                # window of the following lines.
+                #
+                # A fixed window bled into whatever sat below the call.
+                # Measured on a real codebase, that reported four `.map()` calls
+                # returning an array, an object and two strings, because a `<`
+                # from an unrelated `return (` two lines down looked like JSX
+                # belonging to the callback.
+                window = _callback_body(cleaned, index, match.start())
+
+                # `<` alone is not JSX: `index < currentIndex` *inside* a
+                # callback matched it, so a correctly keyed list was reported
+                # as having no key.
+                if not JSX_ELEMENT.search(window):
+                    continue
                 if KEY_PROP.search(window):
                     continue
 

@@ -193,6 +193,59 @@ def test_entropy_separates_random_from_prose():
     assert shannon_entropy("aaaaaaaaaaaaaaaaaaaa") < 1.0
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        # Every one of these was reported for "rendering a list without a key"
+        # on a real codebase. None of them renders anything.
+        'const rows = labels.map((label, i) => [label, values[i]]);\nreturn (\n  <ul>\n    <li>x</li>\n  </ul>\n);\n',
+        'const points = values.map((v, i) => ({ x: i, y: v }));\nreturn (\n  <svg>\n    <path d="" />\n  </svg>\n);\n',
+        'return dates.map((_, i) => `#${i + 1}`);\n',
+        'const text = cells.map((c) => c.textContent);\nreturn <div>{text}</div>;\n',
+    ],
+)
+async def test_a_map_that_renders_nothing_needs_no_key(make_context, code):
+    """The window used to bleed into whatever sat below the call, so a `<` from
+    an unrelated `return (` looked like JSX belonging to the callback."""
+    ctx = make_context({"src/App.jsx": code})
+    assert await MissingKeyRule().run(ctx) == []
+
+
+async def test_a_comparison_inside_a_callback_is_not_jsx(make_context):
+    """`index < currentIndex` matched a bare `<`, so a correctly keyed list was
+    reported as having no key."""
+    code = (
+        "const items = STAGES.map((stage, index) => {\n"
+        "  const done = index < currentIndex;\n"
+        '  return <li key={stage}>{stage}</li>;\n'
+        "});\n"
+    )
+    ctx = make_context({"src/Progress.jsx": code})
+    assert await MissingKeyRule().run(ctx) == []
+
+
+async def test_a_genuinely_unkeyed_list_is_still_reported(make_context):
+    """The fix must not silence the rule it exists for."""
+    code = "return items.map((item) => <li>{item.name}</li>);\n"
+    ctx = make_context({"src/List.jsx": code})
+    findings = await MissingKeyRule().run(ctx)
+    assert len(findings) == 1
+
+
+async def test_a_key_on_a_multiline_element_is_found(make_context):
+    """The key often sits several lines below the `.map(`, inside the element."""
+    code = (
+        "return items.map((item) => (\n"
+        "  <ListRow\n"
+        "    key={item.id}\n"
+        "    label={item.name}\n"
+        "  />\n"
+        "));\n"
+    )
+    ctx = make_context({"src/List.jsx": code})
+    assert await MissingKeyRule().run(ctx) == []
+
+
 def test_redact_never_reveals_the_value():
     secret = "AKIAIOSFODNN7EXAMPLE"
     out = redact(secret)
