@@ -52,9 +52,11 @@ class StoredSourceProvider:
         entries = await get_blob_store().tree(self._report_id)
         if not entries:
             raise SourceUnavailable(
-                "The source for this upload was not kept. Uploads analysed "
-                "before file viewing existed did not store their files; "
-                "re-upload the archive to browse it."
+                "The source for this upload is no longer stored. Uploaded "
+                "files are kept within a fixed storage budget and the oldest "
+                "are dropped first, and uploads analysed before file viewing "
+                "existed never stored theirs. The report is unaffected — "
+                "re-upload the archive to browse its files again."
             )
         return entries
 

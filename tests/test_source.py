@@ -16,7 +16,11 @@ from app.config import Settings
 from app.ingest.snapshot import Snapshot
 from app.schemas import SourceInfo, SourceKind
 from app.source.base import SourceUnavailable
-from app.source.blobs import InMemoryBlobStore, MAX_STORED_FILES
+from app.source.blobs import (
+    MAX_STORED_FILES,
+    MAX_TOTAL_BLOB_BYTES,
+    InMemoryBlobStore,
+)
 from app.source.providers import (
     GitHubSourceProvider,
     StoredSourceProvider,
@@ -115,6 +119,45 @@ async def test_deleting_a_report_takes_its_source_with_it(snapshot):
     await store.put("r1", snapshot)
     await store.delete("r1")
     assert await store.tree("r1") == []
+
+
+async def test_the_oldest_upload_is_evicted_when_the_budget_is_exceeded(snapshot):
+    """Stored source is the one thing that grows without bound, and a managed
+    free database has a finite allowance. Whole reports at a time — half a
+    project is a broken tree, which is worse than an absent one that says so."""
+    store = InMemoryBlobStore()
+    for report_id in ("first", "second", "third"):
+        await store.put(report_id, snapshot)
+
+    # A budget that fits roughly one report's worth forces two evictions.
+    one_report = sum(
+        len(packed) for _, packed in store._files["third"].values()
+    )
+    evicted = await store.prune(budget=one_report)
+
+    assert evicted == 2
+    assert await store.tree("first") == [], "oldest goes first"
+    assert await store.tree("second") == []
+    assert await store.tree("third") != [], "newest survives"
+
+
+async def test_pruning_does_nothing_while_under_budget(snapshot):
+    store = InMemoryBlobStore()
+    await store.put("r1", snapshot)
+    assert await store.prune(budget=MAX_TOTAL_BLOB_BYTES) == 0
+    assert await store.tree("r1") != []
+
+
+async def test_deleting_a_report_keeps_the_eviction_order_consistent(snapshot):
+    """An explicit delete must not leave a phantom in the eviction queue, or the
+    next prune would evict something that is already gone and stop early."""
+    store = InMemoryBlobStore()
+    await store.put("r1", snapshot)
+    await store.put("r2", snapshot)
+    await store.delete("r1")
+
+    assert await store.prune(budget=0) == 1, "only r2 was left to evict"
+    assert await store.tree("r2") == []
 
 
 async def test_an_upload_with_no_stored_source_explains_itself(snapshot):
