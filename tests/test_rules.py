@@ -14,7 +14,7 @@ from app.analysis.rules.dependencies import (
     coerce_version,
     resolved_versions_from_lockfile,
 )
-from app.analysis.rules.quality import LongFileRule
+from app.analysis.rules.quality import DeepNestingRule, LongFileRule
 from app.analysis.rules.react import MissingKeyRule
 from app.analysis.rules.secrets import (
     EnvNotIgnoredRule,
@@ -501,3 +501,48 @@ async def test_long_file_reports_actual_line_count(make_context):
 async def test_short_file_is_not_reported(make_context):
     ctx = make_context({"src/small.js": "const a = 1;\n"})
     assert await LongFileRule().run(ctx) == []
+
+
+async def test_jsx_markup_is_not_deep_control_flow(make_context):
+    """Raw brace depth measured punctuation. Every `className={…}` and
+    `{items.map(…)}` counted, so a flat component read as deeply nested —
+    measured on a real frontend, all eleven findings were markup."""
+    code = (
+        "export function Panel({ items }) {\n"
+        "  return (\n"
+        '    <div className={cn("a", "b")}>\n'
+        "      <ul>\n"
+        "        {items.map((item) => (\n"
+        "          <li key={item.id}>\n"
+        "            <span className={item.cls}>{item.name}</span>\n"
+        "          </li>\n"
+        "        ))}\n"
+        "      </ul>\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n"
+    )
+    ctx = make_context({"src/Panel.jsx": code})
+    assert await DeepNestingRule().run(ctx) == []
+
+
+async def test_genuinely_nested_branches_are_still_reported(make_context):
+    """The fix must not silence the rule it exists for."""
+    code = (
+        "function go(a) {\n"
+        "  if (a) {\n"
+        "    for (const x of a) {\n"
+        "      while (x.next) {\n"
+        "        try {\n"
+        "          if (x.bad) {\n"
+        "            report(x);\n"
+        "          }\n"
+        "        } catch (e) {}\n"
+        "      }\n"
+        "    }\n"
+        "  }\n"
+        "}\n"
+    )
+    ctx = make_context({"src/go.js": code})
+    findings = await DeepNestingRule().run(ctx)
+    assert len(findings) == 1

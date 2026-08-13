@@ -31,6 +31,12 @@ FUNCTION_START = re.compile(
 
 TODO_MARKER = re.compile(r"\b(TODO|FIXME|HACK|XXX)\b[:\s]", re.IGNORECASE)
 
+# Braces that represent a branch a reader must hold in mind, as opposed to an
+# object literal, a JSX interpolation or a plain function body.
+CONTROL_FLOW = re.compile(
+    r"\b(?:if|else|for|while|switch|case|try|catch|finally|do)\b"
+)
+
 
 @register
 class LongFileRule:
@@ -181,11 +187,25 @@ class DeepNestingRule:
                 continue
             lines = strip_comments_and_strings(text, source.language).splitlines()
 
-            depth = 0
+            # Only braces opened by control flow count.
+            #
+            # Raw brace depth measured punctuation, not nesting. In JSX every
+            # `className={…}`, every `key={…}` and every `{items.map(…)}` is a
+            # brace, so a flat component read as deeply nested — measured on a
+            # real frontend, all eleven findings were markup, and the rule's own
+            # description ("hold several conditions in mind at once") was false
+            # for every one of them.
+            stack: list[bool] = []
             worst = 0
             worst_line = 0
             for number, line in enumerate(lines, start=1):
-                depth += line.count("{") - line.count("}")
+                control = bool(CONTROL_FLOW.search(line))
+                for char in line:
+                    if char == "{":
+                        stack.append(control)
+                    elif char == "}" and stack:
+                        stack.pop()
+                depth = sum(stack)
                 if depth > worst:
                     worst, worst_line = depth, number
 
