@@ -228,6 +228,19 @@ class ReportSummary(BaseModel):
     severity_counts: SeverityCounts
     total_findings: int
     duration_seconds: float
+    suppressed_count: int = Field(
+        default=0, description="Findings the owner has accepted."
+    )
+    effective_score: int | None = Field(
+        default=None,
+        description=(
+            "`score` with accepted findings excluded, or null when none are. "
+            "Stored rather than computed here: a listing is built from indexed "
+            "columns and never deserialises the payload, which is what keeps it "
+            "cheap — and History showing a different number than the report it "
+            "links to is worse than the cost of keeping this up to date."
+        ),
+    )
 
 
 class ChurnEntry(BaseModel):

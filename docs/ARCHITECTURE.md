@@ -216,11 +216,25 @@ let suppressions affect the score at all.
 `can_suppress` is the one field on a report that varies by caller. It exists so
 the UI can omit an action that would only ever be refused.
 
-**Known inconsistency:** `GET /api/reports` returns summaries built from indexed
-columns and never deserialises the payload, which is what keeps listing cheap —
-so History and the trend chart show the score *as analysed*, not as adjusted.
-Fixing it means persisting the effective score and recomputing it across a
-repository's reports whenever a suppression changes.
+### Keeping History honest
+
+A listing is built entirely from indexed columns and never deserialises
+`payload` — that is what keeps it cheap — so it cannot recompute anything. Left
+alone, History and the trend chart showed the score *as analysed* while the
+report page they link to showed it adjusted, and one report displayed two
+different numbers depending on where you looked at it.
+
+So `reports.effective_score` and `reports.suppressed_count` are cached columns,
+refreshed by `_refresh_effective_scores` whenever a suppression changes. It is a
+fan-out write — a suppression applies to the repository, so accepting a finding
+changes every past report that contained it — bounded by `reports_for`'s limit,
+because an account with a thousand analyses of one project should not turn one
+click into a thousand updates.
+
+Deliberately a write-time cost: listings are frequent, suppression changes are
+not. Both paths measure a report through the same `_mark`, so they cannot
+disagree about what "accepted" means, and if a refresh fails the cache goes
+stale while the report pages stay correct — they compute the value directly.
 
 ---
 

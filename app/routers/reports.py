@@ -60,6 +60,53 @@ async def list_reports(
     )
 
 
+def _mark(report: Report, reasons: dict[str, str]) -> int:
+    """Flag accepted findings on ``report`` and return how many.
+
+    The one place a report is measured against a suppression set, so the number
+    on the report page and the number cached for the listing cannot disagree
+    about what "accepted" means.
+    """
+    suppressed = 0
+    for finding in report.findings:
+        if finding.fingerprint and finding.fingerprint in reasons:
+            finding.suppressed = True
+            finding.suppression_reason = reasons[finding.fingerprint] or None
+            suppressed += 1
+    report.suppressed_count = suppressed
+    if suppressed:
+        report.effective_score = compute_score(
+            [f for f in report.findings if not f.suppressed],
+            report.project.analysed_files,
+        )
+    return suppressed
+
+
+async def _refresh_effective_scores(owner_id: str, repository: str) -> None:
+    """Recompute the cached score for every report of this repository.
+
+    A suppression applies to the repository, not to one analysis, so accepting
+    a finding changes the score of every past report that contained it — and
+    History reads those from indexed columns rather than from the payload.
+
+    Deliberately a fan-out write rather than work moved to read time: listings
+    are frequent and this is not. It is bounded by ``reports_for``, and a
+    failure here leaves the cache stale while the report pages stay correct,
+    because those compute the value directly.
+    """
+    store = get_store()
+    entries = await get_suppression_store().list(owner_id, repository)
+    reasons = {entry.fingerprint: entry.reason for entry in entries}
+
+    for report in await store.reports_for(repository, owner_id=owner_id):
+        count = _mark(report, reasons)
+        await store.set_effective_score(
+            report.id,
+            report.effective_score.value if report.effective_score else None,
+            count,
+        )
+
+
 async def _apply_suppressions(report: Report, owner_id: str | None) -> Report:
     """Mark accepted findings and recompute the score without them.
 
@@ -81,23 +128,10 @@ async def _apply_suppressions(report: Report, owner_id: str | None) -> Report:
     if not entries:
         return report
 
-    reasons = {entry.fingerprint: entry.reason for entry in entries}
-    suppressed = 0
-    for finding in report.findings:
-        if finding.fingerprint and finding.fingerprint in reasons:
-            finding.suppressed = True
-            finding.suppression_reason = reasons[finding.fingerprint] or None
-            suppressed += 1
-
-    report.suppressed_count = suppressed
-    if suppressed:
-        # `score` stays exactly what the analysis produced; this is an addition,
-        # not an edit. Recomputed on read so removing a suppression takes effect
-        # without re-analysing.
-        report.effective_score = compute_score(
-            [f for f in report.findings if not f.suppressed],
-            report.project.analysed_files,
-        )
+    # `score` stays exactly what the analysis produced; this is an addition, not
+    # an edit. Computed on read so removing a suppression takes effect without
+    # re-analysing, and so this page is right even when the listing's cache is.
+    _mark(report, {entry.fingerprint: entry.reason for entry in entries})
     return report
 
 
@@ -205,6 +239,7 @@ async def suppress_finding(
             rule_id=finding.rule_id,
         ),
     )
+    await _refresh_effective_scores(user.id, report.source.repository)
 
 
 @router.delete("/{report_id}/findings/{finding_id}/suppression", status_code=204)
@@ -219,6 +254,7 @@ async def unsuppress_finding(
     await get_suppression_store().remove(
         user.id, report.source.repository, finding.fingerprint
     )
+    await _refresh_effective_scores(user.id, report.source.repository)
 
 
 @router.delete("/{report_id}", status_code=204)

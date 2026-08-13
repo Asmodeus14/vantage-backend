@@ -228,6 +228,58 @@ async def test_unsuppressing_restores_the_finding_without_reanalysing(api):
     assert restored["effective_score"] is None
 
 
+async def test_history_shows_the_same_score_as_the_report_it_links_to(api):
+    """The listing is built from indexed columns and never reads the payload, so
+    the adjusted score has to be cached there. Without this, History said 72 and
+    the report it linked to said 84."""
+    critical = located("fp1", "f1", severity=Severity.CRITICAL,
+                       category=Category.SECURITY)
+    await api.reports.save(report_with(critical), owner_id="u1")
+
+    with TestClient(app) as client:
+        api.sign_in(user("u1"))
+        client.put("/api/reports/r1/findings/f1/suppression", json={"reason": "x"})
+
+        page = client.get("/api/reports/r1").json()
+        listing = client.get("/api/reports").json()
+
+    assert listing[0]["effective_score"] == page["effective_score"]["value"]
+    assert listing[0]["suppressed_count"] == 1
+    # The analysed score is still reported alongside, unchanged.
+    assert listing[0]["score"] == page["score"]["value"]
+
+
+async def test_accepting_updates_every_past_report_of_that_repository(api):
+    """A suppression applies to the repository, not to one analysis, so an
+    older report containing the same problem has to move too."""
+    await api.reports.save(report_with(located("fp1", "f1")), owner_id="u1")
+    await api.reports.save(
+        report_with(located("fp1", "f9"), report_id="r2"), owner_id="u1"
+    )
+
+    with TestClient(app) as client:
+        api.sign_in(user("u1"))
+        client.put("/api/reports/r2/findings/f9/suppression", json={"reason": "x"})
+        listing = client.get("/api/reports").json()
+
+    assert {row["id"]: row["suppressed_count"] for row in listing} == {"r1": 1, "r2": 1}
+
+
+async def test_restoring_clears_the_cached_score_everywhere(api):
+    await api.reports.save(report_with(located("fp1", "f1")), owner_id="u1")
+
+    with TestClient(app) as client:
+        api.sign_in(user("u1"))
+        client.put("/api/reports/r1/findings/f1/suppression", json={"reason": "x"})
+        assert client.get("/api/reports").json()[0]["effective_score"] is not None
+
+        client.delete("/api/reports/r1/findings/f1/suppression")
+        listing = client.get("/api/reports").json()
+
+    assert listing[0]["effective_score"] is None
+    assert listing[0]["suppressed_count"] == 0
+
+
 async def test_accepting_twice_updates_the_reason_rather_than_duplicating(api):
     await api.reports.save(report_with(located("fp1", "f1")), owner_id="u1")
 

@@ -13,7 +13,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, select
+from sqlalchemy import DateTime, Float, Integer, String, Text, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -51,6 +51,12 @@ class ReportRow(Base):
     # Null for anonymous reports, including every row created before sign-in
     # existed. Those stay reachable by id and are never listed.
     owner_id: Mapped[str | None] = mapped_column(String(24), index=True)
+    # A cache of what the score becomes once the owner's accepted findings are
+    # excluded, refreshed whenever a suppression changes. It exists only so a
+    # listing can show the same number as the report it links to without
+    # deserialising every payload. Null when nothing is accepted.
+    effective_score: Mapped[int | None] = mapped_column(Integer)
+    suppressed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     # The full report. Indexed columns above exist so listing never needs to
     # deserialise this.
     payload: Mapped[dict] = mapped_column(JSON_TYPE, nullable=False)
@@ -79,6 +85,24 @@ class ReportStore(Protocol):
         """
         ...
 
+    async def reports_for(
+        self, repository: str, *, owner_id: str | None = None, limit: int = 100
+    ) -> list[Report]:
+        """Every report of ``repository`` belonging to ``owner_id``, newest first.
+
+        Used to refresh the cached effective scores after a suppression changes.
+        Bounded, because this is a fan-out write and an account with a thousand
+        analyses of one project should not turn one click into a thousand
+        updates.
+        """
+        ...
+
+    async def set_effective_score(
+        self, report_id: str, effective_score: int | None, suppressed_count: int
+    ) -> None:
+        """Update only the cached columns, leaving the analysis untouched."""
+        ...
+
     async def list(
         self,
         limit: int = 25,
@@ -100,7 +124,12 @@ class ReportStore(Protocol):
         ...
 
 
-def _summarise(report: Report) -> ReportSummary:
+def _summarise(
+    report: Report,
+    *,
+    effective_score: int | None = None,
+    suppressed_count: int = 0,
+) -> ReportSummary:
     return ReportSummary(
         id=report.id,
         created_at=report.created_at,
@@ -110,6 +139,8 @@ def _summarise(report: Report) -> ReportSummary:
         severity_counts=report.severity_counts,
         total_findings=len(report.findings),
         duration_seconds=report.duration_seconds,
+        effective_score=effective_score,
+        suppressed_count=suppressed_count,
     )
 
 
@@ -123,6 +154,8 @@ class InMemoryReportStore:
         # Ownership is not part of the Report payload — it is a property of the
         # row, not of the analysis — so it is tracked alongside.
         self._owners: dict[str, str | None] = {}
+        # Mirrors the two cached columns on the Postgres row.
+        self._effective: dict[str, tuple[int | None, int]] = {}
         self._capacity = capacity
 
     async def save(self, report: Report, *, owner_id: str | None = None) -> None:
@@ -132,6 +165,7 @@ class InMemoryReportStore:
         while len(self._reports) > self._capacity:
             evicted, _ = self._reports.popitem(last=False)
             self._owners.pop(evicted, None)
+            self._effective.pop(evicted, None)
 
     async def get(self, report_id: str) -> Report:
         report = self._reports.get(report_id)
@@ -161,7 +195,31 @@ class InMemoryReportStore:
         if repository is not None:
             reports = (r for r in reports if r.source.repository == repository)
         reports = (r for r in reports if self._owners.get(r.id) == owner_id)
-        return [_summarise(r) for r in reports][:limit]
+        return [
+            _summarise(
+                r,
+                effective_score=self._effective.get(r.id, (None, 0))[0],
+                suppressed_count=self._effective.get(r.id, (None, 0))[1],
+            )
+            for r in reports
+        ][:limit]
+
+    async def reports_for(
+        self, repository: str, *, owner_id: str | None = None, limit: int = 100
+    ) -> list[Report]:
+        matches = [
+            report
+            for report in reversed(list(self._reports.values()))
+            if report.source.repository == repository
+            and self._owners.get(report.id) == owner_id
+        ]
+        return [r.model_copy(deep=True) for r in matches[:limit]]
+
+    async def set_effective_score(
+        self, report_id: str, effective_score: int | None, suppressed_count: int
+    ) -> None:
+        if report_id in self._reports:
+            self._effective[report_id] = (effective_score, suppressed_count)
 
     async def owner_of(self, report_id: str) -> str | None:
         return self._owners.get(report_id)
@@ -273,9 +331,50 @@ class PostgresReportStore:
                     ),
                     total_findings=row.total_findings,
                     duration_seconds=float(row.duration_seconds),
+                    effective_score=row.effective_score,
+                    suppressed_count=row.suppressed_count or 0,
                 )
             )
         return summaries
+
+    async def reports_for(
+        self, repository: str, *, owner_id: str | None = None, limit: int = 100
+    ) -> list[Report]:
+        maker = get_sessionmaker()
+        if maker is None:  # pragma: no cover
+            raise RuntimeError("Database is not configured")
+
+        query = (
+            select(ReportRow)
+            .where(ReportRow.repository == repository)
+            .where(
+                ReportRow.owner_id.is_(None)
+                if owner_id is None
+                else ReportRow.owner_id == owner_id
+            )
+            .order_by(ReportRow.created_at.desc())
+            .limit(limit)
+        )
+        async with maker() as session:
+            rows = (await session.execute(query)).scalars().all()
+        return [Report.model_validate(row.payload) for row in rows]
+
+    async def set_effective_score(
+        self, report_id: str, effective_score: int | None, suppressed_count: int
+    ) -> None:
+        maker = get_sessionmaker()
+        if maker is None:  # pragma: no cover
+            raise RuntimeError("Database is not configured")
+        statement = (
+            update(ReportRow)
+            .where(ReportRow.id == report_id)
+            .values(
+                effective_score=effective_score, suppressed_count=suppressed_count
+            )
+        )
+        async with maker() as session:
+            await session.execute(statement)
+            await session.commit()
 
     async def latest_for(
         self, repository: str, *, owner_id: str | None = None
