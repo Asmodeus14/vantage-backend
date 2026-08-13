@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+# A second push to the same branch cancels the first: the older run's result is
+# about code nobody is going to merge.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      # No environment is configured, deliberately. The suite is written to run
+      # against an unconfigured service — that is the configuration most
+      # contributors have, and it is what `tests/conftest.py` enforces.
+      - name: Tests
+        run: python -m pytest -q
+
+      # Catches a revision that cannot be loaded, or a chain broken by two
+      # branches claiming the same `down_revision`. Plain `history`, not
+      # `--indicate-current`: that one connects to the database to read
+      # `alembic_version`, and CI deliberately has none.
+      - name: Migration chain is intact
+        run: python -m alembic history
+
+  imports:
+    # A rule module that is not imported in `rules/__init__.py` never runs, and
+    # nothing else notices. This asserts the registry is not silently empty.
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Every rule is registered
+        run: |
+          python - <<'PY'
+          import app.analysis.rules  # noqa: F401
+          from app.analysis.base import all_rules
+
+          rules = all_rules()
+          print(f"{len(rules)} rules registered")
+          for rule in sorted(rules, key=lambda r: r.id):
+              print(f"  {rule.id}")
+          assert len(rules) >= 12, "the registry looks short — is a module unimported?"
+
+          ids = [r.id for r in rules]
+          assert len(ids) == len(set(ids)), f"duplicate rule ids: {ids}"
+          PY

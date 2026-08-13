@@ -22,6 +22,7 @@ from app.auth.dependencies import (
 from app.auth.store import (
     AuthenticatedUser,
     create_session,
+    github_token_for,
     revoke_all_sessions,
     revoke_session,
     upsert_user,
@@ -34,6 +35,7 @@ from app.limiter import limiter
 from app.schemas import (
     AuthStatus,
     CurrentUser,
+    RepositoryOption,
     SessionCreated,
     SessionRequest,
     UploadTicket,
@@ -101,6 +103,81 @@ async def me(user: AuthenticatedUser = Depends(require_user)) -> CurrentUser:
         scopes=list(user.scopes),
         can_read_private_repositories=user.can_read_private_repositories,
     )
+
+
+@router.get("/repositories", response_model=list[RepositoryOption])
+@limiter.limit("60/hour")
+async def list_repositories(
+    request: Request,  # required by slowapi's decorator
+    user: AuthenticatedUser = Depends(require_user),
+    settings: Settings = Depends(get_settings),
+) -> list[RepositoryOption]:
+    """Repositories this account can reach, most recently pushed first.
+
+    Uses the *user's* token, so GitHub decides what is visible. Private
+    repositories appear only if they granted `repo`; there is no filter here to
+    fall out of step with what they actually approved.
+
+    One page, not all of them. A picker is for finding the thing you were
+    already thinking of, and paging an account with 900 repositories would cost
+    nine requests out of their hourly budget to build a list nobody scrolls.
+    """
+    token = github_token_for(user, settings)
+    if not token:
+        # The encryption key was rotated; the account works, the token cannot be
+        # read. Empty rather than an error — the URL field still works.
+        return []
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(settings.github_timeout_seconds)
+        ) as client:
+            response = await client.get(
+                f"{API_ROOT}/user/repos",
+                headers={
+                    "Accept": "application/vnd.github+json",
+                    "Authorization": f"Bearer {token}",
+                    "X-GitHub-Api-Version": "2022-11-28",
+                },
+                params={
+                    "sort": "pushed",
+                    "direction": "desc",
+                    "per_page": 100,
+                    # Repositories they can actually push to or were added to,
+                    # rather than every fork they have ever starred.
+                    "affiliation": "owner,collaborator,organization_member",
+                },
+            )
+    except httpx.HTTPError as exc:
+        logger.warning("Could not list repositories: %s", exc)
+        raise GitHubIdentityError(
+            "Could not reach GitHub to list your repositories.",
+            detail="Paste a repository URL instead.",
+        ) from exc
+
+    if response.status_code != 200:
+        logger.info("GitHub refused a repository listing: %s", response.status_code)
+        raise GitHubIdentityError(
+            "GitHub would not list your repositories.",
+            detail=(
+                "This is usually an expired sign-in or a rate limit. Signing in "
+                "again, or pasting a repository URL, both work."
+            ),
+        )
+
+    return [
+        RepositoryOption(
+            full_name=item.get("full_name", ""),
+            description=item.get("description"),
+            private=bool(item.get("private")),
+            language=item.get("language"),
+            default_branch=item.get("default_branch"),
+            html_url=item.get("html_url"),
+            pushed_at=item.get("pushed_at"),
+        )
+        for item in response.json()
+        if item.get("full_name")
+    ]
 
 
 @router.post("/upload-ticket", response_model=UploadTicket, status_code=201)

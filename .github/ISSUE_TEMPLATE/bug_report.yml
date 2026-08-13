@@ -1,0 +1,63 @@
+name: Bug report
+description: Something behaves differently than it should
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Found a security vulnerability?** Do not use this form — see
+        [SECURITY.md](../blob/master/SECURITY.md) for private reporting.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you expected, and what happened instead.
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: >
+        If it involves a specific repository, name it — analysis is
+        deterministic, so a public repository makes this reproducible exactly.
+      placeholder: |
+        1. POST /api/analyze/repository with https://github.com/owner/name
+        2. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: health
+    attributes:
+      label: /api/health
+      description: >
+        Paste the response. It reports which optional dependencies are
+        configured, and most surprising behaviour turns out to be one of them
+        being absent. Redact nothing — it contains no secrets.
+      render: json
+
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      placeholder: "3.0.0, or the commit SHA"
+
+  - type: dropdown
+    id: how
+    attributes:
+      label: How are you running it?
+      options:
+        - Locally, no database
+        - Locally, with Postgres
+        - Deployed (Render or similar)
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log output
+      render: shell

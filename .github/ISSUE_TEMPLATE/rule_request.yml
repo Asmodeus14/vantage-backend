@@ -1,0 +1,50 @@
+name: Rule request
+description: Something Vantage should detect and does not
+labels: [rule]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What should it catch?
+      description: The defect itself, not the check. What goes wrong in production?
+    validations:
+      required: true
+
+  - type: textarea
+    id: example
+    attributes:
+      label: Code that should trigger it
+      render: javascript
+    validations:
+      required: true
+
+  - type: textarea
+    id: counterexample
+    attributes:
+      label: Similar code that should NOT trigger it
+      description: >
+        The most useful part of this form. A rule that cannot tell these apart
+        becomes noise, and noise is what makes people stop reading findings.
+      render: javascript
+    validations:
+      required: true
+
+  - type: dropdown
+    id: confidence
+    attributes:
+      label: Can this be detected reliably, or is it a heuristic?
+      description: >
+        Heuristics are welcome — they are reported as such rather than presented
+        as certainties. Saying which up front decides the rule's confidence level.
+      options:
+        - Reliably — the pattern is unambiguous
+        - Heuristic — it will have false positives
+    validations:
+      required: true
+
+  - type: input
+    id: ecosystem
+    attributes:
+      label: Which projects does it apply to?
+      description: Rules are gated, so a Python project is never told it is missing ESLint.
+      placeholder: "React, any Node project, Python, any language"

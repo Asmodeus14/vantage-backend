@@ -485,6 +485,24 @@ class SessionCreated(BaseModel):
     user: CurrentUser
 
 
+class RepositoryOption(BaseModel):
+    """A repository the signed-in user can reach, for the picker.
+
+    Private ones appear only when the account granted `repo`; GitHub decides
+    that, not this service, so there is no separate filter to get out of step.
+    """
+
+    full_name: str = Field(description="'owner/name'")
+    description: str | None = None
+    private: bool = False
+    language: str | None = None
+    default_branch: str | None = None
+    html_url: str | None = None
+    pushed_at: datetime | None = Field(
+        default=None, description="Last push, so the list can lead with live work."
+    )
+
+
 class UploadTicket(BaseModel):
     """Authorises attributing one direct upload to the account that asked.
 

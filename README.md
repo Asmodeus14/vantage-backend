@@ -255,7 +255,12 @@ Two things worth knowing before you set this up:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — module layout, the rule
   engine, persistence, and the security model
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — setup, adding a rule, writing a
+  migration, and the conventions
+- [`SECURITY.md`](SECURITY.md) — how to report a vulnerability, and what is
+  already defended
+- [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md)
 
 ## Licence
 
-MIT.
+[MIT](LICENSE).
