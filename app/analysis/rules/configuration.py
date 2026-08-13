@@ -190,7 +190,7 @@ class NoTypeScriptStrictRule:
             # commas, so json.loads would reject valid files.
             if '"strict"' in text and '"strict": true' not in text.replace("'", '"'):
                 line = next(
-                    (n for n, l in enumerate(config.lines(), 1) if '"strict"' in l), 1
+                    (n for n, row in enumerate(config.lines(), 1) if '"strict"' in row), 1
                 )
                 findings.append(
                     ctx.finding(

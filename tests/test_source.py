@@ -17,7 +17,6 @@ from app.ingest.snapshot import Snapshot
 from app.schemas import SourceInfo, SourceKind
 from app.source.base import SourceUnavailable
 from app.source.blobs import (
-    MAX_STORED_FILES,
     MAX_TOTAL_BLOB_BYTES,
     InMemoryBlobStore,
 )
@@ -27,7 +26,6 @@ from app.source.providers import (
     provider_for,
     safe_path,
 )
-
 from tests.test_api_flow import make_report
 
 
@@ -249,8 +247,8 @@ async def test_the_tree_carries_finding_counts_so_the_sidebar_can_show_them(
     """Otherwise the client fetches every file just to learn where to put a
     marker."""
     from fastapi.testclient import TestClient
-    from app.main import app
 
+    from app.main import app
     from tests.test_api_flow import make_finding
 
     report = make_report("r1", repository=None)
@@ -269,8 +267,8 @@ async def test_the_tree_carries_finding_counts_so_the_sidebar_can_show_them(
 
 async def test_reading_a_file_returns_its_findings_for_the_gutter(api, snapshot):
     from fastapi.testclient import TestClient
-    from app.main import app
 
+    from app.main import app
     from tests.test_api_flow import make_finding
 
     report = make_report("r1", repository=None)
@@ -295,6 +293,7 @@ async def test_reading_a_file_returns_its_findings_for_the_gutter(api, snapshot)
 
 async def test_escaping_the_project_over_http_is_refused(api, snapshot):
     from fastapi.testclient import TestClient
+
     from app.main import app
 
     report = make_report("r1", repository=None)
@@ -315,6 +314,7 @@ async def test_an_unavailable_source_explains_itself_over_http(api):
     """A bare 404 leaves someone guessing whether the report or the file is
     the problem."""
     from fastapi.testclient import TestClient
+
     from app.main import app
 
     report = make_report("r1", repository="acme/app")
@@ -383,7 +383,6 @@ async def test_a_signed_in_user_may_still_analyse_their_own_private_repository(
     granted `repo` has already proved to GitHub that they can see it."""
     import httpx
 
-    from app.errors import PrivateRepositoryError
     from app.ingest.github import GitHubCredentials, RepositoryRef, fetch_repository
 
     class FakeResponse:
@@ -422,6 +421,7 @@ async def test_the_viewer_refuses_private_source_to_anonymous_callers(api, snaps
     lines; this serves whole files, so sharing the link must not hand over the
     source of a private repository."""
     from fastapi.testclient import TestClient
+
     from app.main import app
 
     report = make_report("r1", repository="acme/secret")
@@ -445,6 +445,7 @@ async def test_a_public_report_is_still_readable_by_anyone(api, snapshot):
     """The guard must not touch the ordinary case — a shared report link is the
     whole point of an unguessable id."""
     from fastapi.testclient import TestClient
+
     from app.main import app
 
     report = make_report("r1", repository=None)
@@ -510,7 +511,7 @@ async def test_the_window_is_centred_so_clamping_cannot_cut_the_finding(monkeypa
     text = "\n".join(f"line {i}" for i in range(1, 1001))
     finding = make_finding(id="f1", file="src/a.ts", line=500, end_line=500)
 
-    code, first, last = await widen(monkeypatch, finding, text)
+    _code, first, last = await widen(monkeypatch, finding, text)
 
     assert last - first + 1 <= MAX_CONTEXT_LINES
     assert first < 500 < last
@@ -525,7 +526,7 @@ async def test_a_finding_at_the_top_of_a_file_still_gets_a_full_window(monkeypat
     text = "\n".join(f"line {i}" for i in range(1, 1001))
     finding = make_finding(id="f1", file="src/a.ts", line=1, end_line=1)
 
-    code, first, last = await widen(monkeypatch, finding, text)
+    _code, first, last = await widen(monkeypatch, finding, text)
 
     assert first == 1
     assert last == MAX_CONTEXT_LINES

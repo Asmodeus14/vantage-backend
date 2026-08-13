@@ -1,0 +1,50 @@
+# Ruff configuration.
+#
+# A deliberate selection rather than the default, and a short ignore list where
+# a rule is wrong about this codebase rather than this codebase being wrong.
+
+line-length = 90
+target-version = "py312"
+
+[lint]
+select = [
+    "E",    # pycodestyle
+    "F",    # pyflakes — the ones that catch real bugs
+    "I",    # import order
+    "UP",   # pyupgrade: syntax this Python version supersedes
+    "B",    # bugbear
+    "SIM",  # simplifications that genuinely read better
+    "C4",   # comprehensions
+    "PIE",
+    "RUF",
+]
+
+ignore = [
+    # `def endpoint(user = Depends(current_user))` is how FastAPI declares a
+    # dependency. B008 exists for `def f(x = [])`, which is a real bug — this is
+    # the framework's documented idiom, and "fixing" it breaks every route.
+    "B008",
+    # `except Exception:` around enrichment is deliberate and commented at each
+    # site: commit history, the AI context widener and the blob prune must never
+    # fail the analysis they decorate. The findings are the product.
+    "BLE001",
+    # Long lines in prose comments and long URLs in references.
+    "E501",
+    # Em dashes and typographic quotes in user-facing strings are deliberate.
+    # These messages are read by people, not parsed.
+    "RUF001", "RUF002", "RUF003",
+    # `class Severity(str, Enum)` → `StrEnum` is not a free swap: StrEnum
+    # changes what `str()` and f-strings produce, and these enums are Pydantic
+    # response fields whose serialised form is the API contract. Worth doing
+    # deliberately with the contract in mind, not as a lint fix.
+    "UP042",
+]
+
+[lint.per-file-ignores]
+# Migrations are generated-shaped and read top to bottom.
+"alembic/versions/*" = ["I001"]
+# Tests deliberately construct odd values and shadow names for clarity.
+"tests/*" = ["RUF012"]
+
+[lint.isort]
+known-first-party = ["app", "tests"]

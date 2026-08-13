@@ -24,7 +24,7 @@ suppression restores the finding immediately instead of needing a re-analysis.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy import DateTime, String, Text, delete, select
@@ -159,7 +159,7 @@ def new_suppression(
         reason=reason.strip()[:MAX_REASON_LENGTH],
         title=title,
         rule_id=rule_id,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
     )
 
 

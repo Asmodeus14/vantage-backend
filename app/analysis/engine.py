@@ -9,7 +9,6 @@ static element hardcoded to 100% width.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import time
 from collections.abc import Awaitable, Callable
@@ -28,7 +27,6 @@ from app.analysis.rules.dependencies import (
 from app.analysis.rules.python import collect_python_dependencies
 from app.analysis.scoring import compute_score, finding_penalty, severity_counts
 from app.config import Settings
-from app.ingest.filter import ANALYSABLE_LANGUAGES
 from app.ingest.snapshot import Snapshot
 from app.schemas import (
     AnalysisStage,
@@ -242,7 +240,7 @@ class AnalysisEngine:
                         rule.run(ctx), timeout=self.settings.osv_timeout_seconds + 30
                     )
                     findings.extend(produced)
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     logger.warning("Rule %s timed out", rule.id)
                 except Exception:
                     # One failing rule must not lose the entire analysis.

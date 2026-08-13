@@ -21,7 +21,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.schemas import Category, CategoryScore, Confidence, Finding, Score, SeverityCounts, Severity
+from app.schemas import (
+    Category,
+    CategoryScore,
+    Confidence,
+    Finding,
+    Score,
+    Severity,
+    SeverityCounts,
+)
 
 SEVERITY_WEIGHT: dict[Severity, float] = {
     Severity.CRITICAL: 10.0,
@@ -90,7 +98,7 @@ def category_score(
 
     return CategoryScore(
         category=category,
-        score=int(round(max(0.0, min(100.0, value)))),
+        score=round(max(0.0, min(100.0, value))),
         findings=len(relevant),
         weight=policy.weight,
     )
@@ -148,7 +156,7 @@ def compute_score(findings: list[Finding], analysed_files: int) -> Score:
     weighted = sum(
         c.score * POLICIES.get(c.category, DEFAULT_POLICY).weight for c in categories
     )
-    value = int(round(weighted / total_weight)) if total_weight else 100
+    value = round(weighted / total_weight) if total_weight else 100
 
     counts = severity_counts(findings)
     scored = [c for c in categories if c.category in present] or categories

@@ -15,11 +15,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import secrets
-import shutil
 import tempfile
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.analysis.diffing import compare, is_comparable
@@ -116,7 +115,7 @@ class Job:
                     timeout=timeout,
                 )
             return True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return False
 
 
@@ -272,7 +271,7 @@ class AnalysisRunner:
 
         report = Report(
             id=new_id(),
-            created_at=datetime.now(timezone.utc),
+            created_at=datetime.now(UTC),
             duration_seconds=round(duration, 2),
             source=source,
             project=project,

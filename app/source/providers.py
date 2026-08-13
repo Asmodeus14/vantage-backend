@@ -37,7 +37,7 @@ def safe_path(path: str) -> str:
     if not cleaned:
         raise SourceUnavailable("No file was requested.")
     normalised = normpath(cleaned)
-    if normalised.startswith("..") or normalised.startswith("/") or "\\" in cleaned:
+    if normalised.startswith(("..", "/")) or "\\" in cleaned:
         raise SourceUnavailable("That path is not inside this project.")
     return normalised
 
@@ -114,7 +114,9 @@ class GitHubSourceProvider:
                 response = await client.get(url, params={"recursive": "1"})
         except httpx.HTTPError as exc:
             logger.warning("GitHub tree fetch failed: %s", exc)
-            raise SourceUnavailable("Could not reach GitHub to list the files.")
+            raise SourceUnavailable(
+                "Could not reach GitHub to list the files."
+            ) from exc
 
         if response.status_code != 200:
             raise self._unavailable(response.status_code)
@@ -145,7 +147,9 @@ class GitHubSourceProvider:
                 response = await client.get(url, params={"ref": self._commit})
         except httpx.HTTPError as exc:
             logger.warning("GitHub file fetch failed: %s", exc)
-            raise SourceUnavailable("Could not reach GitHub to read that file.")
+            raise SourceUnavailable(
+                "Could not reach GitHub to read that file."
+            ) from exc
 
         if response.status_code != 200:
             raise self._unavailable(response.status_code)
@@ -158,8 +162,8 @@ class GitHubSourceProvider:
 
         try:
             raw = base64.b64decode(payload.get("content") or "")
-        except (binascii.Error, ValueError):
-            raise SourceUnavailable("That file could not be decoded.")
+        except (binascii.Error, ValueError) as exc:
+            raise SourceUnavailable("That file could not be decoded.") from exc
         if b"\x00" in raw[:8_000]:
             raise SourceUnavailable("That file is binary.")
         return raw.decode("utf-8", errors="replace")

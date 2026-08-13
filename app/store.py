@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import logging
 from collections import OrderedDict
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Protocol
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, select, update
+from sqlalchemy import DateTime, Float, Integer, String, select, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON

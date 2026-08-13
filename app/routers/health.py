@@ -17,7 +17,7 @@ pressure.
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends
 
@@ -76,7 +76,7 @@ async def ping() -> PingResponse:
     cannot be pointed at the cheap behaviour and then be silently reporting
     "up" for a service whose database has been unreachable for a week.
     """
-    return PingResponse(version=__version__, timestamp=datetime.now(timezone.utc))
+    return PingResponse(version=__version__, timestamp=datetime.now(UTC))
 
 
 @router.get("/api/health", response_model=HealthResponse)
@@ -96,7 +96,7 @@ async def health(
         status=status,
         version=__version__,
         environment=settings.environment,
-        timestamp=datetime.now(timezone.utc),
+        timestamp=datetime.now(UTC),
         ai=AIHealth(**ai_status.to_payload()),
         database=database,
         auth=AuthStatus(

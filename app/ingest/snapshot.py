@@ -88,7 +88,7 @@ class Snapshot:
     # -- construction --------------------------------------------------
 
     @classmethod
-    def build(cls, root: Path) -> "Snapshot":
+    def build(cls, root: Path) -> Snapshot:
         snapshot = cls(root=root)
         for absolute in sorted(root.rglob("*")):
             if absolute.is_symlink() or not absolute.is_file():

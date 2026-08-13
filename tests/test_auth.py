@@ -19,14 +19,13 @@ from app.auth.tokens import TokenCipherUnavailable, decrypt_token, encrypt_token
 from app.config import Settings
 from app.main import app
 from app.store import InMemoryReportStore
-
 from tests.test_api_flow import make_report
 
 FERNET_KEY = "8ZQZ3xw1n0m6Q3kY0d0m2y7cQxq3d2XwqZ8b8dJc0mY="
 
 
 def settings(**overrides) -> Settings:
-    base = dict(database_url=None, gemini_api_key=None)
+    base = {"database_url": None, "gemini_api_key": None}
     base.update(overrides)
     return Settings(**base)
 

@@ -560,7 +560,7 @@ class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     version: str
     environment: str
-    auth: "AuthStatus" = Field(
+    auth: AuthStatus = Field(
         default_factory=lambda: AuthStatus(configured=False, reason=None)
     )
     timestamp: datetime

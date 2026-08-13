@@ -15,7 +15,6 @@ import asyncio
 import logging
 import tempfile
 from pathlib import Path
-from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import StreamingResponse
@@ -42,7 +41,7 @@ async def analyse_repository(
     request: Request,
     body: AnalyzeRepositoryRequest,
     settings: Settings = Depends(get_settings),
-    user: Optional[AuthenticatedUser] = Depends(current_user),
+    user: AuthenticatedUser | None = Depends(current_user),
 ) -> dict[str, str]:
     """Start analysis of a GitHub repository.
 
@@ -67,7 +66,7 @@ async def analyse_repository(
 
 
 def _credentials_for(
-    user: Optional[AuthenticatedUser], settings: Settings
+    user: AuthenticatedUser | None, settings: Settings
 ) -> GitHubCredentials:
     """Prefer the user's own token, falling back to the server's.
 
@@ -89,7 +88,7 @@ async def analyse_upload(
     file: UploadFile = File(...),
     ticket: str = Form(default=""),
     settings: Settings = Depends(get_settings),
-    user: Optional[AuthenticatedUser] = Depends(current_user),
+    user: AuthenticatedUser | None = Depends(current_user),
 ) -> dict[str, str]:
     """Start analysis of an uploaded ZIP archive.
 

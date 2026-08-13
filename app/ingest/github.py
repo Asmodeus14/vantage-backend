@@ -111,7 +111,7 @@ class GitHubCredentials:
     source: Literal["user", "server", "anonymous"] = "anonymous"
 
     @classmethod
-    def for_server(cls, settings: Settings) -> "GitHubCredentials":
+    def for_server(cls, settings: Settings) -> GitHubCredentials:
         if settings.github_token:
             return cls(token=settings.github_token, source="server")
         return cls()

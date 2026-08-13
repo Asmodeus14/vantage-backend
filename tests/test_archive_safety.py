@@ -124,7 +124,7 @@ def test_zip_slip_writes_nothing_outside_root(tmp_path: Path) -> None:
     assert not (tmp_path / "evil.txt").exists()
     assert not (tmp_path / "escape.txt").exists()
     assert not (tmp_path.parent / "evil.txt").exists()
-    escaped = [p for p in tmp_path.rglob("evil.txt")] + [p for p in tmp_path.rglob("escape.txt")]
+    escaped = list(tmp_path.rglob("evil.txt")) + list(tmp_path.rglob("escape.txt"))
     assert escaped == []
 
 

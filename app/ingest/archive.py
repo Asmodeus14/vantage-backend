@@ -37,9 +37,10 @@ import re
 import shutil
 import tarfile
 import zipfile
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import IO, Iterator
+from typing import IO
 
 from app.errors import ArchiveTooLargeError, InvalidArchiveError, UnsafeArchiveError
 
@@ -271,7 +272,9 @@ def extract_tar_gz(
     archive_bytes = archive_path.stat().st_size
 
     try:
-        tf = tarfile.open(archive_path, "r:gz")
+
+        # exists only to turn a bad archive into a domain error.
+        tf = tarfile.open(archive_path, "r:gz")  # noqa: SIM115
     except (tarfile.TarError, OSError) as exc:
         raise InvalidArchiveError("File is not a valid tar.gz archive", detail=str(exc)) from exc
 

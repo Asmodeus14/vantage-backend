@@ -119,9 +119,7 @@ def should_read(relative: PurePosixPath) -> bool:
     if relative.suffix.lower() in SKIP_EXTENSIONS:
         return False
     name = relative.name.lower()
-    if name.endswith((".min.js", ".min.css", ".map")):
-        return False
-    return True
+    return not name.endswith((".min.js", ".min.css", ".map"))
 
 
 def should_analyse(relative: PurePosixPath) -> bool:

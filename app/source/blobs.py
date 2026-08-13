@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import gzip
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Protocol
 
 from sqlalchemy import (
@@ -100,7 +100,7 @@ class PostgresBlobStore:
             return 0
 
         rows: list[SourceBlobRow] = []
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         budget = MAX_STORED_BYTES
         for source in _storable(snapshot):
             if len(rows) >= MAX_STORED_FILES:

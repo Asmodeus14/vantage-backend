@@ -59,7 +59,7 @@ class RuleContext:
     snapshot: Snapshot
     facts: ProjectFacts
     settings: Settings
-    http: "httpx.AsyncClient | None" = None
+    http: httpx.AsyncClient | None = None
 
     def finding(
         self,

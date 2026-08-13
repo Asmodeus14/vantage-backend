@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import io
 import zipfile
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
 
+from app.analysis.scoring import compute_score, severity_counts
 from app.config import Settings, get_settings
 from app.main import app
 from app.routers import health as health_module
@@ -21,7 +22,6 @@ from app.schemas import (
     SourceInfo,
     SourceKind,
 )
-from app.analysis.scoring import compute_score, severity_counts
 from app.store import InMemoryReportStore, reset_store
 
 
@@ -49,15 +49,15 @@ def in_memory(monkeypatch):
 
 
 def make_finding(**kwargs) -> Finding:
-    defaults = dict(
-        id="f1",
-        rule_id="test/rule",
-        title="Test finding",
-        description="d",
-        category=Category.QUALITY,
-        severity=Severity.MEDIUM,
-        confidence=Confidence.HIGH,
-    )
+    defaults = {
+        "id": "f1",
+        "rule_id": "test/rule",
+        "title": "Test finding",
+        "description": "d",
+        "category": Category.QUALITY,
+        "severity": Severity.MEDIUM,
+        "confidence": Confidence.HIGH,
+    }
     defaults.update(kwargs)
     return Finding(**defaults)
 
@@ -146,7 +146,7 @@ def make_report(report_id: str = "r1", repository: str | None = "a/b") -> Report
     findings = [make_finding()]
     return Report(
         id=report_id,
-        created_at=datetime.now(timezone.utc),
+        created_at=datetime.now(UTC),
         duration_seconds=1.5,
         source=SourceInfo(
             kind=SourceKind.REPOSITORY, repository=repository, ref="main"
@@ -394,8 +394,9 @@ def test_an_unusable_ticket_uploads_anonymously_rather_than_failing(
 
 
 def test_unknown_job_stream_reports_failure_rather_than_hanging(in_memory):
-    with TestClient(app) as client:
-        with client.stream("GET", "/api/analyze/nope/events") as response:
+    with TestClient(app) as client, client.stream(
+        "GET", "/api/analyze/nope/events"
+    ) as response:
             assert response.status_code == 200
             body = "".join(response.iter_text())
     assert "failed" in body

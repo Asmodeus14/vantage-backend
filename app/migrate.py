@@ -29,8 +29,9 @@ def main() -> int:
         return 0
 
     try:
-        from alembic import command
         from alembic.config import Config
+
+        from alembic import command
 
         config = Config(str(ROOT / "alembic.ini"))
         config.set_main_option("script_location", str(ROOT / "alembic"))

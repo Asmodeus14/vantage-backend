@@ -11,7 +11,12 @@ from __future__ import annotations
 
 import re
 
-from app.analysis.base import RuleContext, iter_code_lines, register, strip_comments_and_strings
+from app.analysis.base import (
+    RuleContext,
+    iter_code_lines,
+    register,
+    strip_comments_and_strings,
+)
 from app.schemas import Category, Confidence, Finding, Severity
 
 JSX_LANGUAGES = ("javascript", "typescript")
@@ -42,7 +47,7 @@ def _callback_body(lines: list[str], start: int, column: int) -> str:
     opened = False
     out: list[str] = []
 
-    for offset in range(0, min(MAX_CALLBACK_LINES, len(lines) - start)):
+    for offset in range(min(MAX_CALLBACK_LINES, len(lines) - start)):
         text = lines[start + offset]
         piece = text[column:] if offset == 0 else text
         for char in piece:

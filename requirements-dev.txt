@@ -1,0 +1,6 @@
+# Development-only. Deliberately not in requirements.txt: the deployed instance
+# installs that on every deploy, and a linter is dead weight in a free-tier
+# container that is already tight on install time and memory.
+-r requirements.txt
+
+ruff>=0.16

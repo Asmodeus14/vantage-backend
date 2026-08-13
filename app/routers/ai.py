@@ -16,7 +16,6 @@ derived from rule, file, line and title, so re-opening a finding costs nothing.
 
 import logging
 from collections import OrderedDict
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 
@@ -32,7 +31,7 @@ from app.ai.provider import LLMProvider, provider_dependency
 from app.auth.dependencies import current_user
 from app.auth.store import AuthenticatedUser
 from app.config import Settings, get_settings
-from app.errors import AIUnavailableError, VantageError, ReportNotFoundError
+from app.errors import AIUnavailableError, ReportNotFoundError, VantageError
 from app.ingest.github import GitHubCredentials
 from app.limiter import limiter
 from app.routers.analyze import _credentials_for
@@ -52,7 +51,7 @@ class InvalidActionTarget(VantageError):
     code = "finding_not_found"
 
 
-def _cache_get(key: tuple[str, str]) -> Optional[AIActionResponse]:
+def _cache_get(key: tuple[str, str]) -> AIActionResponse | None:
     response = _cache.get(key)
     if response is not None:
         _cache.move_to_end(key)
@@ -69,8 +68,9 @@ def _cache_put(key: tuple[str, str], value: AIActionResponse) -> None:
 def _language_of(path: str | None) -> str | None:
     if not path:
         return None
-    from app.ingest.filter import detect_language
     from pathlib import PurePosixPath
+
+    from app.ingest.filter import detect_language
 
     return detect_language(PurePosixPath(path))
 
@@ -184,7 +184,7 @@ async def run_ai_action(
     body: AIActionRequest,
     settings: Settings = Depends(get_settings),
     provider: LLMProvider = Depends(provider_dependency),
-    user: Optional[AuthenticatedUser] = Depends(current_user),
+    user: AuthenticatedUser | None = Depends(current_user),
 ) -> AIActionResponse:
     status = provider.status()
     if not status.available:

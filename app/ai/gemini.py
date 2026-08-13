@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, AsyncIterator
+from collections.abc import AsyncIterator
+from typing import Any
 
 from app.ai.provider import AIStatus, CircuitBreaker, ProviderState
 from app.config import Settings
@@ -126,7 +127,7 @@ class GeminiProvider:
                 ),
                 timeout=self._settings.ai_timeout_seconds,
             )
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             self._breaker.record_failure(
                 f"Gemini did not respond within {self._settings.ai_timeout_seconds:.0f}s."
             )

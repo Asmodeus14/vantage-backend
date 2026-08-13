@@ -79,7 +79,9 @@ async def list_files(
         provider = provider_for(report, settings, _credentials_for(user, settings))
         entries = await provider.tree()
     except SourceUnavailable as exc:
-        raise SourceNotAvailableError("Source is not available.", detail=exc.reason)
+        raise SourceNotAvailableError(
+            "Source is not available.", detail=exc.reason
+        ) from exc
 
     # Finding counts ride along, so the tree can show where the problems are
     # without the client fetching every file to find out.
@@ -118,7 +120,9 @@ async def read_file(
         provider = provider_for(report, settings, _credentials_for(user, settings))
         content = await provider.read(path)
     except SourceUnavailable as exc:
-        raise SourceNotAvailableError("That file is not available.", detail=exc.reason)
+        raise SourceNotAvailableError(
+            "That file is not available.", detail=exc.reason
+        ) from exc
 
     return SourceFile(
         path=path,

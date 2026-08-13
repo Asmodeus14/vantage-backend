@@ -19,9 +19,10 @@ Design constraints, all of them reactions to how v2 failed:
 from __future__ import annotations
 
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from enum import Enum
-from typing import AsyncIterator, Protocol, runtime_checkable
+from typing import Protocol, runtime_checkable
 
 from app.config import Settings, get_settings
 from app.errors import AIUnavailableError

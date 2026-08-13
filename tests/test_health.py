@@ -7,8 +7,6 @@ quota and left the AI feature permanently disabled.
 
 from __future__ import annotations
 
-import types
-
 import pytest
 from fastapi.testclient import TestClient
 

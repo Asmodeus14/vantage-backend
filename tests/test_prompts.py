@@ -23,7 +23,6 @@ from app.ai.prompts import (
     validate_output,
 )
 
-
 SENTINEL = "UNTRUSTED_CONTENT_DEADBEEFDEADBEEF"
 
 

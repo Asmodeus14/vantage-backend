@@ -163,7 +163,7 @@ class HardcodedSecretRule:
             if name in NOISY_NAMES or name.endswith(NOISY_SUFFIXES):
                 continue
             # A committed example file is documentation, not a leak.
-            if name.endswith(".example") or ".example." in name or name.endswith(".sample"):
+            if name.endswith((".example", ".sample")) or ".example." in name:
                 continue
 
             lines = source.lines()

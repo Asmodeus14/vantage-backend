@@ -168,9 +168,9 @@ class LongFunctionRule:
                     key=f"{source.path}|{name}",
                     title=f"{name}() spans {length} lines",
                         description=(
-                            f"A function this long usually has several distinct "
-                            f"jobs and many branches, which makes each path hard "
-                            f"to cover with tests."
+                            "A function this long usually has several distinct "
+                            "jobs and many branches, which makes each path hard "
+                            "to cover with tests."
                             + (
                                 f" {logic} of these lines are logic; the other "
                                 f"{markup} are markup, which is not counted "

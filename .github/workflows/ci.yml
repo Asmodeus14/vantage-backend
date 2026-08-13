@@ -24,7 +24,13 @@ jobs:
           python-version: "3.12"
           cache: pip
 
-      - run: pip install -r requirements.txt
+      - run: pip install -r requirements-dev.txt
+
+      # Fails the build. A linter nobody is forced to run is a linter nobody
+      # runs — and this project reports `config/no-linter` as a finding, so
+      # having one that is merely advisory would be worse than having none.
+      - name: Lint
+        run: python -m ruff check .
 
       # No environment is configured, deliberately. The suite is written to run
       # against an unconfigured service — that is the configuration most

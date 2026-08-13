@@ -7,7 +7,7 @@ edit, assert the finding is still the same finding".
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -38,14 +38,14 @@ def ctx() -> RuleContext:
 
 
 def build(ctx: RuleContext, **kwargs) -> Finding:
-    defaults = dict(
-        rule_id="test/rule",
-        title="Something is wrong",
-        description="d",
-        category=Category.QUALITY,
-        severity=Severity.MEDIUM,
-        confidence=Confidence.HIGH,
-    )
+    defaults = {
+        "rule_id": "test/rule",
+        "title": "Something is wrong",
+        "description": "d",
+        "category": Category.QUALITY,
+        "severity": Severity.MEDIUM,
+        "confidence": Confidence.HIGH,
+    }
     defaults.update(kwargs)
     return ctx.finding(**defaults)
 
@@ -120,7 +120,7 @@ def make_report(
 ) -> Report:
     return Report(
         id=report_id,
-        created_at=datetime.now(timezone.utc) - timedelta(minutes=minutes_ago),
+        created_at=datetime.now(UTC) - timedelta(minutes=minutes_ago),
         duration_seconds=1.0,
         source=SourceInfo(
             kind=SourceKind.UPLOAD if repository is None else SourceKind.REPOSITORY,

@@ -46,7 +46,7 @@ _PREFIX = "upload:"
 def issue_upload_ticket(user_id: str, settings: Settings) -> str:
     """Mint a ticket attributing one upload to ``user_id``."""
     cipher: Fernet = _cipher(settings)
-    return cipher.encrypt(f"{_PREFIX}{user_id}".encode("utf-8")).decode("ascii")
+    return cipher.encrypt(f"{_PREFIX}{user_id}".encode()).decode("ascii")
 
 
 def redeem_upload_ticket(ticket: str, settings: Settings) -> str | None:

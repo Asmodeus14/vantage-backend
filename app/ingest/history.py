@@ -15,7 +15,7 @@ import asyncio
 import logging
 import re
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 
@@ -104,7 +104,7 @@ async def file_change_counts(
     whole history. GitHub omits the header when there is only one page, in which
     case the returned commits are counted directly.
     """
-    since = (datetime.now(timezone.utc) - timedelta(days=WINDOW_DAYS)).isoformat()
+    since = (datetime.now(UTC) - timedelta(days=WINDOW_DAYS)).isoformat()
     semaphore = asyncio.Semaphore(MAX_CONCURRENCY)
     counts: dict[str, int] = {}
 

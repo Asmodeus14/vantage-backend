@@ -60,7 +60,7 @@ def parse_requirements(text: str) -> dict[str, str]:
     for raw in text.splitlines():
         line = raw.strip()
         # Options (-r, -e, --index-url), comments and blanks.
-        if not line or line.startswith("#") or line.startswith("-"):
+        if not line or line.startswith(("#", "-")):
             continue
         match = _REQUIREMENT.match(line)
         if not match:

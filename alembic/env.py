@@ -15,16 +15,16 @@ from __future__ import annotations
 import asyncio
 from logging.config import fileConfig
 
-from alembic import context
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from app.config import get_settings
-from app.db import Base, _connect_args
+from alembic import context
 
 # Importing the models registers them on Base.metadata. Without this,
 # autogenerate would see an empty schema and propose dropping every table.
 from app import store  # noqa: F401
 from app.auth import models  # noqa: F401
+from app.config import get_settings
+from app.db import Base, _connect_args
 
 config = context.config
 if config.config_file_name is not None:

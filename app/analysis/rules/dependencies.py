@@ -18,7 +18,7 @@ import logging
 import re
 from typing import Any
 
-from app.analysis.base import ProjectFacts, RuleContext, register
+from app.analysis.base import RuleContext, register
 from app.analysis.rules.python import (
     collect_python_dependencies,
     normalise_name,
@@ -345,7 +345,7 @@ class KnownVulnerabilityRule:
         return findings
 
     async def _query_batch(
-        self, ctx: RuleContext, dependencies: list["ResolvedDependency"]
+        self, ctx: RuleContext, dependencies: list[ResolvedDependency]
     ) -> dict[str, list[str]]:
         assert ctx.http is not None
         payload = {
@@ -367,8 +367,19 @@ class KnownVulnerabilityRule:
         response.raise_for_status()
         results = response.json().get("results", [])
 
+        # OSV returns one result per query, in order. If it ever returned
+        # fewer, `zip` would silently drop the tail — packages reported as clean
+        # because nothing asked about them, which is the worst way for a
+        # security check to be wrong. Not `strict=True`: raising here loses
+        # every finding in the batch, and a partial answer that says so is
+        # better than none.
+        if len(results) != len(dependencies):
+            logger.warning(
+                "OSV returned %d results for %d queries; %d package(s) unchecked",
+                len(results), len(dependencies), len(dependencies) - len(results),
+            )
         out: dict[str, list[str]] = {}
-        for dependency, result in zip(dependencies, results):
+        for dependency, result in zip(dependencies, results, strict=False):
             vulns = result.get("vulns") or []
             out[dependency.name] = [v["id"] for v in vulns if "id" in v]
         return out

@@ -15,14 +15,13 @@ from app.auth.store import AuthenticatedUser
 from app.config import Settings, get_settings
 from app.main import app
 from app.routers import health as health_module
-from app.schemas import Category, Confidence, Severity
+from app.schemas import Category, Severity
 from app.store import InMemoryReportStore
 from app.suppressions import (
     InMemorySuppressionStore,
     new_suppression,
     reset_suppression_store,
 )
-
 from tests.test_api_flow import make_finding, make_report
 
 
