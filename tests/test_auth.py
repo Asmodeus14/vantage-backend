@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.auth.dependencies import current_user
 from app.auth.store import AuthenticatedUser, hash_session_token
+from app.auth.tickets import issue_upload_ticket, redeem_upload_ticket
 from app.auth.tokens import TokenCipherUnavailable, decrypt_token, encrypt_token
 from app.config import Settings
 from app.main import app
@@ -113,6 +114,66 @@ def test_a_bad_key_explains_how_to_generate_one():
     with pytest.raises(TokenCipherUnavailable) as exc:
         encrypt_token("x", settings(token_encryption_key="not-a-fernet-key"))
     assert "Fernet.generate_key" in str(exc.value)
+
+
+# --------------------------------------------------------------------------
+# Upload tickets
+# --------------------------------------------------------------------------
+
+def test_an_upload_ticket_round_trips_to_its_owner():
+    """The one request that cannot carry a session: a ZIP upload posts directly
+    to the API to clear the frontend's serverless body cap."""
+    s = settings(token_encryption_key=FERNET_KEY)
+    ticket = issue_upload_ticket("u1", s)
+    assert redeem_upload_ticket(ticket, s) == "u1"
+
+
+def test_a_ticket_does_not_contain_the_user_id_in_the_clear():
+    s = settings(token_encryption_key=FERNET_KEY)
+    assert "u1" not in issue_upload_ticket("u1", s)
+
+
+def test_a_forged_ticket_is_anonymous_rather_than_an_error():
+    """Every failure gives the same answer — the upload proceeds unattributed —
+    so a bad credential never costs someone the archive they just uploaded."""
+    s = settings(token_encryption_key=FERNET_KEY)
+    assert redeem_upload_ticket("not-a-ticket", s) is None
+    assert redeem_upload_ticket("", s) is None
+
+
+def test_a_ticket_from_another_key_is_refused():
+    issued = issue_upload_ticket("u1", settings(token_encryption_key=FERNET_KEY))
+    other = settings(token_encryption_key="pKQ0m8jXQyq3l2Xw8b8dJc0mY3xw1n0m6Q3kY0d0m2y=")
+    assert redeem_upload_ticket(issued, other) is None
+
+
+def test_an_expired_ticket_is_refused():
+    from app.auth import tickets
+
+    s = settings(token_encryption_key=FERNET_KEY)
+    ticket = issue_upload_ticket("u1", s)
+    # Fernet carries its own timestamp, which is why expiry needs no storage —
+    # Render runs more than one worker and a nonce table would have to be shared.
+    original = tickets.TICKET_TTL_SECONDS
+    try:
+        tickets.TICKET_TTL_SECONDS = -1
+        assert redeem_upload_ticket(ticket, s) is None
+    finally:
+        tickets.TICKET_TTL_SECONDS = original
+
+
+def test_a_stored_github_token_cannot_be_passed_off_as_a_ticket():
+    """Both use the same cipher, so the payload is prefixed. Without that, a
+    leaked token ciphertext would redeem as a user id."""
+    s = settings(token_encryption_key=FERNET_KEY)
+    disguised = encrypt_token("gho_secret", s)
+    assert redeem_upload_ticket(disguised, s) is None
+
+
+def test_tickets_need_encryption_configured():
+    """Never silently fall back to an unauthenticated ticket."""
+    with pytest.raises(TokenCipherUnavailable):
+        issue_upload_ticket("u1", settings())
 
 
 def test_session_tokens_are_stored_only_as_hashes():

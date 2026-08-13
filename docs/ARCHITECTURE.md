@@ -372,6 +372,36 @@ cheaper than the JWT machinery it replaces.
 
 `github_id` is `BigInteger`: GitHub ids are already past 2³¹.
 
+### Upload tickets
+
+One request cannot carry a session: a ZIP upload posts **directly** to this API
+to clear the frontend's serverless body cap, so the HttpOnly, first-party
+session cookie never reaches it. Every signed-in user's upload was therefore
+recorded as anonymous and never appeared in their own History.
+
+`auth/tickets.py` closes that without widening anything else. The browser asks
+the *frontend* — which can read the cookie — for a ticket, and attaches it to
+the upload as a form field.
+
+**A ticket, not the session token.** Handing the session to JavaScript would
+undo the whole reason the cookie is HttpOnly. A ticket says one thing, "this is
+user X", and expires in ten minutes.
+
+**Fernet, so it is stateless.** Fernet carries its own timestamp, so expiry
+needs no storage — the same reasoning as the OAuth `state`, and for the same
+reason: Render runs more than one worker, so a nonce table would have to be
+shared to be worth anything. The cost is that a ticket is replayable within its
+lifetime; someone who intercepted one could attribute *their* upload to *your*
+account for a few minutes. That is a nuisance, not a disclosure — it reads
+nothing — and it is the same exposure the upload request already has.
+
+**The payload is prefixed** (`upload:`), because stored GitHub tokens use the
+same cipher. Without it, a leaked token ciphertext would redeem as a user id.
+
+An unusable ticket is treated as *no* ticket. Refusing an archive someone spent
+a minute uploading, because a credential expired while they were choosing a
+file, is a worse answer than attributing it anonymously.
+
 ### Ownership
 
 | Report | Reachable by id | Appears in the listing | Deletable |

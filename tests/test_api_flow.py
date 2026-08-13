@@ -330,6 +330,69 @@ def test_upload_accepts_a_zip_and_returns_a_job(in_memory):
     assert "job_id" in response.json()
 
 
+def _zip_bytes() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("package.json", '{"name":"demo","dependencies":{}}')
+    buffer.seek(0)
+    return buffer.read()
+
+
+def test_an_upload_ticket_attributes_the_analysis(in_memory, monkeypatch):
+    """The gap this closes: a signed-in user's upload posts directly to the API
+    to clear the frontend's body cap, so it cannot carry the session cookie and
+    was recorded as anonymous — never appearing in their own History."""
+    from app.auth.tickets import issue_upload_ticket
+
+    settings = Settings(
+        database_url=None, gemini_api_key=None,
+        token_encryption_key="8ZQZ3xw1n0m6Q3kY0d0m2y7cQxq3d2XwqZ8b8dJc0mY=",
+    )
+    app.dependency_overrides[get_settings] = lambda: settings
+
+    captured: dict[str, object] = {}
+
+    async def fake_run_upload(self, job, archive, filename, *, owner_id=None):
+        captured["owner_id"] = owner_id
+        await job.close()
+
+    monkeypatch.setattr("app.analysis.runner.AnalysisRunner.run_upload", fake_run_upload)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/analyze/upload",
+            files={"file": ("project.zip", _zip_bytes(), "application/zip")},
+            data={"ticket": issue_upload_ticket("u1", settings)},
+        )
+
+    assert response.status_code == 202
+    assert captured["owner_id"] == "u1"
+
+
+def test_an_unusable_ticket_uploads_anonymously_rather_than_failing(
+    in_memory, monkeypatch
+):
+    """Refusing an archive someone just spent a minute uploading, because a
+    credential expired while they chose a file, is a worse answer."""
+    captured: dict[str, object] = {}
+
+    async def fake_run_upload(self, job, archive, filename, *, owner_id=None):
+        captured["owner_id"] = owner_id
+        await job.close()
+
+    monkeypatch.setattr("app.analysis.runner.AnalysisRunner.run_upload", fake_run_upload)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/analyze/upload",
+            files={"file": ("project.zip", _zip_bytes(), "application/zip")},
+            data={"ticket": "forged"},
+        )
+
+    assert response.status_code == 202
+    assert captured["owner_id"] is None
+
+
 def test_unknown_job_stream_reports_failure_rather_than_hanging(in_memory):
     with TestClient(app) as client:
         with client.stream("GET", "/api/analyze/nope/events") as response:

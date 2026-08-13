@@ -17,12 +17,13 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Request, UploadFile
 from fastapi.responses import StreamingResponse
 
 from app.analysis.runner import AnalysisRunner, jobs
 from app.auth.dependencies import current_user
 from app.auth.store import AuthenticatedUser, github_token_for
+from app.auth.tickets import redeem_upload_ticket
 from app.config import Settings, get_settings
 from app.errors import ArchiveTooLargeError, InvalidArchiveError
 from app.ingest.github import GitHubCredentials
@@ -86,6 +87,7 @@ def _credentials_for(
 async def analyse_upload(
     request: Request,
     file: UploadFile = File(...),
+    ticket: str = Form(default=""),
     settings: Settings = Depends(get_settings),
     user: Optional[AuthenticatedUser] = Depends(current_user),
 ) -> dict[str, str]:
@@ -93,6 +95,14 @@ async def analyse_upload(
 
     The browser posts here directly rather than through the frontend's server,
     because serverless platforms cap proxied request bodies at a few megabytes.
+
+    That is also why ``ticket`` exists: this request cannot carry the session
+    cookie, which is HttpOnly and first-party to the frontend, so without it
+    every signed-in user's upload was recorded as anonymous. An unusable ticket
+    is treated as no ticket rather than as an error — refusing an archive
+    someone just spent a minute uploading, because a credential expired while
+    they were choosing a file, would be a worse answer than attributing it
+    anonymously.
     """
     filename = file.filename or "upload.zip"
     if not filename.lower().endswith(".zip"):
@@ -125,12 +135,15 @@ async def analyse_upload(
         archive_path.unlink(missing_ok=True)
         raise InvalidArchiveError("The uploaded file is empty.")
 
+    # A session, if one somehow reached us; otherwise the ticket. Both are
+    # proofs of the same thing, and neither is trusted over the other — the
+    # cookie simply cannot arrive on this route in production.
+    owner_id = user.id if user else redeem_upload_ticket(ticket, settings)
+
     job = jobs.create()
     runner = AnalysisRunner(settings)
     job.task = asyncio.create_task(
-        runner.run_upload(
-            job, archive_path, filename, owner_id=user.id if user else None
-        )
+        runner.run_upload(job, archive_path, filename, owner_id=owner_id)
     )
     return {"job_id": job.id}
 

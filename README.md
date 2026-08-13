@@ -135,6 +135,7 @@ Full schema at `/docs`. Summary:
 | `GET` | `/api/auth/status` | Whether sign-in can be offered, and why not. |
 | `POST` | `/api/auth/session` | Server-to-server; guarded by `INTERNAL_API_SECRET`. |
 | `GET` | `/api/auth/me` | Current user. |
+| `POST` | `/api/auth/upload-ticket` | Short-lived credential so a direct upload can be attributed. Requires a session. |
 | `POST` | `/api/auth/logout` | Ends this session. Idempotent. |
 | `POST` | `/api/auth/logout-everywhere` | Ends all sessions for the account. |
 
@@ -190,7 +191,7 @@ destructive capability held by anyone it was ever shared with.
 ## Testing
 
 ```bash
-python -m pytest -q                              # 250 tests
+python -m pytest -q                              # 259 tests
 python -m pytest --collect-only -q | tail -1     # current count
 ```
 

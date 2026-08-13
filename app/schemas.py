@@ -485,6 +485,17 @@ class SessionCreated(BaseModel):
     user: CurrentUser
 
 
+class UploadTicket(BaseModel):
+    """Authorises attributing one direct upload to the account that asked.
+
+    Narrow on purpose: it says who, and nothing else. The session token stays
+    HttpOnly and never reaches the browser's JavaScript.
+    """
+
+    ticket: str
+    expires_in: int = Field(description="Seconds until the ticket stops working.")
+
+
 # --------------------------------------------------------------------------
 # Health
 # --------------------------------------------------------------------------

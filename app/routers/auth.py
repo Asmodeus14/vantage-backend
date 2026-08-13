@@ -26,6 +26,7 @@ from app.auth.store import (
     revoke_session,
     upsert_user,
 )
+from app.auth.tickets import TICKET_TTL_SECONDS, issue_upload_ticket
 from app.config import Settings, get_settings
 from app.errors import VantageError
 from app.ingest.github import API_ROOT
@@ -35,6 +36,7 @@ from app.schemas import (
     CurrentUser,
     SessionCreated,
     SessionRequest,
+    UploadTicket,
 )
 
 logger = logging.getLogger(__name__)
@@ -98,6 +100,26 @@ async def me(user: AuthenticatedUser = Depends(require_user)) -> CurrentUser:
         avatar_url=user.avatar_url,
         scopes=list(user.scopes),
         can_read_private_repositories=user.can_read_private_repositories,
+    )
+
+
+@router.post("/upload-ticket", response_model=UploadTicket, status_code=201)
+@limiter.limit("60/hour")
+async def create_upload_ticket(
+    request: Request,  # required by slowapi's decorator
+    user: AuthenticatedUser = Depends(require_user),
+    settings: Settings = Depends(get_settings),
+) -> UploadTicket:
+    """A short-lived credential for the one request that cannot carry a session.
+
+    A ZIP upload posts directly to this API to clear the frontend's serverless
+    body cap, so it cannot send the HttpOnly session cookie — which is why a
+    signed-in user's upload was recorded as anonymous. This authorises exactly
+    that one attribution and nothing else.
+    """
+    return UploadTicket(
+        ticket=issue_upload_ticket(user.id, settings),
+        expires_in=TICKET_TTL_SECONDS,
     )
 
 
