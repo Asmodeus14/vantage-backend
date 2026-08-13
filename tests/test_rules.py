@@ -239,6 +239,45 @@ async def test_placeholder_values_are_ignored(make_context):
     assert await HardcodedSecretRule().run(ctx) == []
 
 
+@pytest.mark.parametrize(
+    "code",
+    [
+        # Every one of these was reported as a leaked credential before the
+        # detector required a literal. Measured on real repositories: 28
+        # findings on psf/requests, essentially all of this shape.
+        "token = secrets.token_urlsafe(32)\n",
+        "self.api_key = self.settings.gemini_api_key\n",
+        "token = github_token_for(user, settings)\n",
+        "password = get_auth_from_url(proxy)\n",
+        "auth = self._digest_auth_handler(request)\n",
+        "token = (credentials.token if credentials else None)\n",
+        "client_secret = os.environ['CLIENT_SECRET']\n",
+    ],
+)
+async def test_code_assigned_to_a_credential_name_is_not_a_secret(make_context, code):
+    """A hardcoded credential is a literal. An expression is code, and a rule
+    that cannot tell them apart reports most of a codebase."""
+    ctx = make_context({"app/service.py": code})
+    assert await HardcodedSecretRule().run(ctx) == []
+
+
+async def test_an_unquoted_value_still_counts_in_an_env_file(make_context):
+    """Requiring a quote must not lose the case that matters most: `.env` files
+    have no quotes and are exactly where real credentials live."""
+    ctx = make_context({"config/.env.production": "GITHUB_TOKEN=ghp_" + "c" * 36 + "\n"})
+    assert len(await HardcodedSecretRule().run(ctx)) == 1
+
+
+async def test_a_documented_connection_string_is_not_a_leak(make_context):
+    """`postgres://user:pass@host/db` has the exact shape of a real one — that
+    is why it is written that way. Reporting a project's own example is how a
+    security rule loses its reader."""
+    ctx = make_context(
+        {"README.md": "DATABASE_URL=postgresql+asyncpg://user:pass@host/db\n"}
+    )
+    assert await HardcodedSecretRule().run(ctx) == []
+
+
 async def test_secrets_are_found_outside_env_files(make_context):
     """v2 only scanned .env*, missing the case that actually matters."""
     ctx = make_context({"src/deep/nested/service.ts": 'const t = "ghp_' + "b" * 36 + '";\n'})

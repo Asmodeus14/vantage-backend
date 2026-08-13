@@ -38,6 +38,22 @@ ASSIGNMENT = re.compile(
     re.IGNORECASE | re.VERBOSE,
 )
 
+# Files where an unquoted `KEY=value` really is a value, not an expression.
+ENV_FILE = re.compile(
+    r"(^|/)(\.env[\w.-]*|[\w.-]*\.(?:env|properties|ini|cfg|conf|toml))$",
+    re.IGNORECASE,
+)
+
+# A right-hand side that is code rather than a literal: a call, an attribute
+# lookup, an index, a comparison.
+#
+# This is what separates `token = "ghp_realsecret..."` from
+# `token = secrets.token_urlsafe(32)`. Measured on real repositories, the
+# unquoted form was almost entirely the second kind: `self.api_key`,
+# `github_token_for(user, settings)`, `get_auth_from_url(proxy)`. Twenty-eight
+# findings on `psf/requests`, essentially all of them code.
+CODE_EXPRESSION = re.compile(r"[(\[\]{}]|\.\w|==|!=|\+|\bor\b|\band\b|\bif\b")
+
 # Interpolation and masking syntax — the whole value must be one of these.
 PLACEHOLDER_TEMPLATE = re.compile(
     r"^(?:x{3,}|\*{3,}|\.{3,}|-{3,}|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\}|"
@@ -51,7 +67,13 @@ PLACEHOLDER_TEMPLATE = re.compile(
 # discarded every value beginning with "a", including real AKIA… AWS keys.
 PLACEHOLDER_WORD = re.compile(
     r"(?:change[-_]?me|replace[-_]?me|your[-_]?|my[-_]?secret|placeholder|"
-    r"example|sample|dummy|fake|insert[-_]?here|todo|xxxxx)",
+    r"example|sample|dummy|fake|insert[-_]?here|todo|xxxxx|"
+    # Connection strings in documentation. `postgres://user:pass@host/db` has
+    # the exact shape of a real one, which is the point of writing it that way
+    # — and reporting a README's own example as a leaked credential is how a
+    # security rule loses its reader.
+    r"user:pass|username:password|user:password|<user>|<password>|"
+    r"user:secret|admin:admin|root:root)",
     re.IGNORECASE,
 )
 
@@ -100,8 +122,25 @@ def _is_placeholder(value: str) -> bool:
     return bool(PLACEHOLDER_WORD.search(stripped))
 
 
+# `postgres://user:pass@host/db`. A connection string with placeholder
+# credentials in it, which is how every project documents its own DATABASE_URL.
+#
+# Narrow on purpose. The general placeholder word list is deliberately not
+# applied to provider-shaped matches, because it would discard a real key
+# containing a word like "test" — but `user:pass@` cannot be a real credential
+# pair, so it can be excluded without that risk.
+_DOCUMENTED_CREDENTIALS = re.compile(
+    r"//(?:user|username|admin|root|<[^>]+>)"
+    r":(?:pass|password|secret|admin|root|<[^>]+>)@",
+    re.IGNORECASE,
+)
+
+
 def _is_documentation_value(value: str) -> bool:
-    return value.strip() in KNOWN_DOCUMENTATION_VALUES
+    stripped = value.strip()
+    if stripped in KNOWN_DOCUMENTATION_VALUES:
+        return True
+    return bool(_DOCUMENTED_CREDENTIALS.search(stripped))
 
 
 @register
@@ -165,6 +204,19 @@ class HardcodedSecretRule:
                 if not assignment:
                     continue
                 value = assignment.group("value")
+
+                # A hardcoded credential is a *literal*. Without a quote this
+                # matched any expression assigned to a credential-shaped name,
+                # which is how `secrets.token_urlsafe(32)` and `self.api_key`
+                # were reported as secrets. Env-style files are the real
+                # exception: there `KEY=value` is genuinely a value.
+                quoted = bool(assignment.group("quote"))
+                if not quoted and not ENV_FILE.search(source.path):
+                    continue
+                # Even quoted, a call inside an f-string is still code.
+                if CODE_EXPRESSION.search(value):
+                    continue
+
                 if _is_placeholder(value) or shannon_entropy(value) < ENTROPY_THRESHOLD:
                     continue
                 key = (source.path, number)
