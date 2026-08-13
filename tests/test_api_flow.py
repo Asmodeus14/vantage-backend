@@ -175,6 +175,18 @@ async def test_missing_report_explains_the_memory_backend(in_memory):
     assert "memory" in (exc.value.detail or "")
 
 
+async def test_sub_second_durations_survive_a_round_trip(in_memory):
+    """`duration_seconds` was an Integer column, so Postgres truncated 0.42 to
+    0 while the in-memory store kept it — the two backends disagreed about the
+    same report, and the UI showed "analysed in 0.0s" for anything fast."""
+    report = make_report("fast")
+    report.duration_seconds = 0.42
+    await in_memory.save(report)
+
+    assert (await in_memory.get("fast")).duration_seconds == 0.42
+    assert (await in_memory.list())[0].duration_seconds == 0.42
+
+
 async def test_memory_store_is_bounded():
     store = InMemoryReportStore(capacity=3)
     for i in range(5):

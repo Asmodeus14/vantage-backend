@@ -1,0 +1,13 @@
+# Normalise line endings in the repository to LF, whatever the checkout does
+# locally. Without this, a Windows checkout with core.autocrlf=true commits
+# CRLF, and the same file then reads as wholly changed on Linux or in WSL.
+* text=auto eol=lf
+
+# Binary: never touched, never diffed as text.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.webp binary
+*.ico binary
+*.gz  binary
+*.zip binary

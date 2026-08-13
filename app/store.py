@@ -13,7 +13,7 @@ from collections import OrderedDict
 from datetime import datetime, timezone
 from typing import Protocol
 
-from sqlalchemy import DateTime, Integer, String, Text, select
+from sqlalchemy import DateTime, Float, Integer, String, Text, select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.types import JSON
@@ -44,7 +44,10 @@ class ReportRow(Base):
     score: Mapped[int] = mapped_column(Integer, nullable=False)
     grade: Mapped[str] = mapped_column(String(2), nullable=False)
     total_findings: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Float, not Integer. Stored as an integer, a sub-second analysis rounded to
+    # 0 on Postgres while the in-memory store kept 0.4 — the two implementations
+    # disagreed about the same report, and the UI showed "analysed in 0.0s".
+    duration_seconds: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     # Null for anonymous reports, including every row created before sign-in
     # existed. Those stay reachable by id and are never listed.
     owner_id: Mapped[str | None] = mapped_column(String(24), index=True)
@@ -167,7 +170,7 @@ class PostgresReportStore:
             score=report.score.value,
             grade=report.score.grade,
             total_findings=len(report.findings),
-            duration_seconds=int(report.duration_seconds),
+            duration_seconds=report.duration_seconds,
             payload=report.model_dump(mode="json"),
         )
         async with maker() as session:
