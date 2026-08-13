@@ -135,6 +135,17 @@ async def create_session(user_id: str, settings: Settings) -> str:
                 last_seen_at=now,
             )
         )
+        # Sweep here, in the same transaction, because this is the one moment
+        # the table is known to be growing and there is nowhere to run a cron
+        # job — the free tier has no scheduler and the process sleeps when idle.
+        #
+        # `resolve_session` alone was not enough: it only deletes the row it was
+        # asked about, so a session that expires and is never presented again
+        # stays for ever. This is what `ix_sessions_expires_at` was created for,
+        # and until now nothing used it.
+        await session.execute(
+            delete(SessionRow).where(SessionRow.expires_at <= now)
+        )
         await session.commit()
 
     return token

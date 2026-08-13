@@ -99,13 +99,20 @@ async def _refresh_effective_scores(owner_id: str, repository: str) -> None:
     entries = await get_suppression_store().list(owner_id, repository)
     reasons = {entry.fingerprint: entry.reason for entry in entries}
 
+    updates: list[tuple[str, int | None, int]] = []
     for report in await store.reports_for(repository, owner_id=owner_id):
         count = _mark(report, reasons)
-        await store.set_effective_score(
-            report.id,
-            report.effective_score.value if report.effective_score else None,
-            count,
+        updates.append(
+            (
+                report.id,
+                report.effective_score.value if report.effective_score else None,
+                count,
+            )
         )
+    # Collected, then written once. Writing inside the loop meant one network
+    # round-trip per report, and on a managed database that is tens of
+    # milliseconds each — a click could block for seconds.
+    await store.set_effective_scores(updates)
 
 
 async def _apply_suppressions(report: Report, owner_id: str | None) -> Report:

@@ -280,6 +280,32 @@ async def test_restoring_clears_the_cached_score_everywhere(api):
     assert listing[0]["suppressed_count"] == 0
 
 
+async def test_the_score_refresh_writes_once_not_once_per_report(api, monkeypatch):
+    """A suppression applies to every report of a repository. Writing inside the
+    loop meant one network round-trip each, and on a managed database that is
+    tens of milliseconds apiece — one click could block for seconds."""
+    for index in range(8):
+        await api.reports.save(
+            report_with(located("fp1", f"f{index}"), report_id=f"r{index}"),
+            owner_id="u1",
+        )
+
+    calls: list[int] = []
+    original = api.reports.set_effective_scores
+
+    async def counting(updates):
+        calls.append(len(updates))
+        await original(updates)
+
+    monkeypatch.setattr(api.reports, "set_effective_scores", counting)
+
+    with TestClient(app) as client:
+        api.sign_in(user("u1"))
+        client.put("/api/reports/r0/findings/f0/suppression", json={"reason": "x"})
+
+    assert calls == [8], "eight reports, one batched write"
+
+
 async def test_accepting_twice_updates_the_reason_rather_than_duplicating(api):
     await api.reports.save(report_with(located("fp1", "f1")), owner_id="u1")
 

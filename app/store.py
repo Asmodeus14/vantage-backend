@@ -97,10 +97,17 @@ class ReportStore(Protocol):
         """
         ...
 
-    async def set_effective_score(
-        self, report_id: str, effective_score: int | None, suppressed_count: int
+    async def set_effective_scores(
+        self, updates: list[tuple[str, int | None, int]]
     ) -> None:
-        """Update only the cached columns, leaving the analysis untouched."""
+        """Update the cached columns for several reports at once.
+
+        Deliberately a batch. A suppression applies to every report of a
+        repository, so the single-report version meant one network round-trip
+        per report — up to the ``reports_for`` cap — and on a managed database
+        each of those is tens of milliseconds. One click could block for
+        seconds.
+        """
         ...
 
     async def list(
@@ -215,11 +222,12 @@ class InMemoryReportStore:
         ]
         return [r.model_copy(deep=True) for r in matches[:limit]]
 
-    async def set_effective_score(
-        self, report_id: str, effective_score: int | None, suppressed_count: int
+    async def set_effective_scores(
+        self, updates: list[tuple[str, int | None, int]]
     ) -> None:
-        if report_id in self._reports:
-            self._effective[report_id] = (effective_score, suppressed_count)
+        for report_id, effective_score, suppressed_count in updates:
+            if report_id in self._reports:
+                self._effective[report_id] = (effective_score, suppressed_count)
 
     async def owner_of(self, report_id: str) -> str | None:
         return self._owners.get(report_id)
@@ -359,21 +367,30 @@ class PostgresReportStore:
             rows = (await session.execute(query)).scalars().all()
         return [Report.model_validate(row.payload) for row in rows]
 
-    async def set_effective_score(
-        self, report_id: str, effective_score: int | None, suppressed_count: int
+    async def set_effective_scores(
+        self, updates: list[tuple[str, int | None, int]]
     ) -> None:
         maker = get_sessionmaker()
         if maker is None:  # pragma: no cover
             raise RuntimeError("Database is not configured")
-        statement = (
-            update(ReportRow)
-            .where(ReportRow.id == report_id)
-            .values(
-                effective_score=effective_score, suppressed_count=suppressed_count
-            )
-        )
+        if not updates:
+            return
+
+        # ORM bulk update by primary key: a bare `update()` plus a list of
+        # dicts each carrying `id`. SQLAlchemy turns that into one executemany
+        # rather than a statement per row, so this is a single round-trip
+        # instead of `len(updates)` — the difference between a click that feels
+        # instant and one that blocks for seconds on a managed database.
+        payload = [
+            {
+                "id": report_id,
+                "effective_score": effective_score,
+                "suppressed_count": suppressed_count,
+            }
+            for report_id, effective_score, suppressed_count in updates
+        ]
         async with maker() as session:
-            await session.execute(statement)
+            await session.execute(update(ReportRow), payload)
             await session.commit()
 
     async def latest_for(
