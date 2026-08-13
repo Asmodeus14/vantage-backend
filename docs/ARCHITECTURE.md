@@ -171,6 +171,52 @@ that makes every legacy finding equal to every other.
 
 ---
 
+## Reading source after the fact
+
+Findings record a file and a line, and until the file viewer there was nothing
+behind that coordinate — the analysed tree is deleted as soon as a run finishes.
+`app/source/` gives it back, for the viewer and eventually for AI actions that
+need more than the ±3 lines a finding carries.
+
+**One interface, two implementations**, chosen by `provider_for(report)`:
+
+| Source | Provider | Why |
+|---|---|---|
+| Repository | `GitHubSourceProvider` | Re-fetched, **pinned to the analysed commit**. Costs nothing to keep and cannot drift. |
+| Upload | `StoredSourceProvider` | The client sent bytes once; there is no URL that would produce them again. |
+
+The split is real and unavoidable, so it is confined to this package —
+everything above asks a `SourceProvider` and never learns which kind it holds.
+That containment is the entire reason the hybrid is affordable; without it, two
+code paths would leak into the viewer, into *Propose fix*, and into every
+future feature that reads source.
+
+Pinning to the commit is not an optimisation. A finding says line 47, and line
+47 only means anything against the tree that was analysed; reading the branch
+head would quietly show the wrong line as soon as anyone pushed. A report with
+no recorded commit is refused with a sentence saying to re-analyse, rather than
+silently showing today's code.
+
+**Stored blobs are bounded**: 8MB gzipped and 2,000 files per report, analysable
+files first, so what gets dropped when a budget runs out is a lockfile rather
+than the module someone is trying to read. One row per file rather than one
+archive per report, because the viewer opens a single file at a time and
+decompressing a whole project to read a 40-line module is a cost that only
+appears under load. Deleting a report deletes its blobs — there is no cascade,
+deliberately, so the obligation stays visible in the router.
+
+`safe_path` normalises before either provider sees a path. It arrives from a URL
+and is interpolated into a GitHub URL in one implementation and a SQL parameter
+in the other; `..` is refused once, here, rather than being relied upon to be
+harmless twice.
+
+Every failure raises `SourceUnavailable` carrying prose. The repository went
+private, the commit was force-pushed away, the upload predates blob storage —
+each is a different situation with a different remedy, and "unavailable" tells
+nobody anything they can act on.
+
+---
+
 ## Accepted findings
 
 A scanner reporting the same forty-seven unchanging low-severity findings on

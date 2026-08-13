@@ -20,7 +20,7 @@ from app.config import get_settings
 from app.db import create_tables, dispose_engine
 from app.errors import VantageError
 from app.limiter import limiter
-from app.routers import ai, analyze, auth, health, reports
+from app.routers import ai, analyze, auth, health, reports, source
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router)
     app.include_router(analyze.router)
     app.include_router(reports.router)
+    app.include_router(source.router)
     app.include_router(ai.router)
 
     @app.get("/", tags=["meta"])

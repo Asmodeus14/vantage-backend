@@ -128,6 +128,8 @@ Full schema at `/docs`. Summary:
 | `PUT` | `/api/reports/{id}/findings/{finding_id}/suppression` | Accept a finding for every analysis of that repository. Owner only; idempotent. |
 | `DELETE` | `/api/reports/{id}/findings/{finding_id}/suppression` | Restore it. Takes effect on the next read, with no re-analysis. |
 | `GET` | `/api/reports/{id}/suppressions` | What **the caller** has accepted for this repository. |
+| `GET` | `/api/reports/{id}/files` | The file tree, with per-file finding counts. |
+| `GET` | `/api/reports/{id}/file?path=` | One file's text, with the findings that point into it. |
 | `DELETE` | `/api/reports/{id}` | Owner only. |
 | `POST` | `/api/reports/{id}/findings/{finding_id}/ai` | Closed action enum. 30/hr. |
 | `GET` | `/api/auth/status` | Whether sign-in can be offered, and why not. |
@@ -188,7 +190,7 @@ destructive capability held by anyone it was ever shared with.
 ## Testing
 
 ```bash
-python -m pytest -q                              # 217 tests
+python -m pytest -q                              # 244 tests
 python -m pytest --collect-only -q | tail -1     # current count
 ```
 

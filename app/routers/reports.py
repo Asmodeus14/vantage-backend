@@ -37,6 +37,7 @@ from app.schemas import (
     Suppression,
     SuppressionRequest,
 )
+from app.source.blobs import get_blob_store
 from app.store import get_store
 from app.suppressions import get_suppression_store, new_suppression
 
@@ -278,3 +279,6 @@ async def delete_report(
         )
 
     await store.delete(report_id)
+    # Stored source outlives its report otherwise, and nothing would ever
+    # reference it again — a leak that only shows up as a growing disk bill.
+    await get_blob_store().delete(report_id)

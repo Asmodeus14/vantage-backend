@@ -52,6 +52,7 @@ from app.schemas import (
     SourceInfo,
     SourceKind,
 )
+from app.source.blobs import get_blob_store
 from app.store import get_store
 
 logger = logging.getLogger(__name__)
@@ -296,6 +297,7 @@ class AnalysisRunner:
             ProgressEvent(stage=AnalysisStage.PERSISTING, message="Saving report")
         )
         await get_store().save(report, owner_id=owner_id)
+        await self._store_source(report, snapshot)
 
         job.report_id = report.id
         await job.emit(
@@ -308,6 +310,26 @@ class AnalysisRunner:
             )
         )
         await job.close()
+
+    async def _store_source(self, report: Report, snapshot: Snapshot) -> None:
+        """Keep an upload's files so they can be viewed later.
+
+        Uploads only. A repository's source is re-fetched from GitHub pinned to
+        the analysed commit, which costs nothing to store and cannot go stale;
+        an upload is bytes someone sent once, with no URL that would produce
+        them again.
+
+        Failing here must not fail the analysis. The report is the product and
+        it is already saved; losing the source means the viewer says so, which
+        is a smaller loss than losing the findings.
+        """
+        if report.source.kind != SourceKind.UPLOAD:
+            return
+        try:
+            kept = await get_blob_store().put(report.id, snapshot)
+            logger.info("Stored %d source files for %s", kept, report.id)
+        except Exception:
+            logger.exception("Could not store source for %s", report.id)
 
     async def _delta(
         self, report: Report, *, owner_id: str | None = None

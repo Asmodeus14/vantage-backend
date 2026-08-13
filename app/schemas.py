@@ -283,6 +283,34 @@ class RepositoryActivity(BaseModel):
     )
 
 
+class SourceFileEntry(BaseModel):
+    path: str
+    size: int
+    language: str | None = None
+    analysable: bool = True
+    findings: int = Field(
+        default=0, description="Findings anchored to this file, for the tree."
+    )
+
+
+class SourceTree(BaseModel):
+    files: list[SourceFileEntry] = Field(default_factory=list)
+    truncated: bool = Field(
+        default=False, description="True when the tree was capped."
+    )
+
+
+class SourceFile(BaseModel):
+    path: str
+    language: str | None = None
+    content: str
+    lines: int
+    findings: list[Finding] = Field(
+        default_factory=list,
+        description="Findings in this file, so the viewer can mark the gutter.",
+    )
+
+
 class Suppression(BaseModel):
     """A finding the owner has accepted, for one repository.
 
