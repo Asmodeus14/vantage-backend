@@ -31,10 +31,15 @@ class NoLinterRule:
     category = Category.CONFIGURATION
 
     def applies(self, ctx: RuleContext) -> bool:
-        # Only meaningful for JS/TS projects.
-        return ctx.facts.is_node
+        # Both ecosystems that have a rule pack. The Node-only gate was correct
+        # while the engine was JS-only, and became a blind spot the moment
+        # Python rules shipped: this API's own repository has no linter at all
+        # and was never told so, because the check did not apply to it.
+        return ctx.facts.is_node or ctx.facts.is_python
 
     async def run(self, ctx: RuleContext) -> list[Finding]:
+        if not ctx.facts.is_node:
+            return self._python(ctx)
         if ctx.snapshot.exists(*ESLINT_CONFIGS):
             return []
         manifests = ctx.snapshot.by_name("package.json")
@@ -54,6 +59,50 @@ class NoLinterRule:
                 line=1 if manifests else None,
                 remediation="Run `npm init @eslint/config`, or adopt Biome for a faster single-binary setup.",
                 references=["https://eslint.org/docs/latest/use/getting-started"],
+            )
+        ]
+
+    def _python(self, ctx: RuleContext) -> list[Finding]:
+        """Ruff, flake8 or pylint — configured anywhere they are usually put."""
+        # A dedicated config file is proof on its own.
+        if ctx.snapshot.exists(".ruff.toml", "ruff.toml", ".flake8", ".pylintrc"):
+            return []
+
+        # `setup.cfg` and `tox.ini` exist in most projects for other reasons, so
+        # their presence proves nothing — the section inside them does.
+        #
+        # Formatters are deliberately not accepted here. black and isort make
+        # code consistent; neither catches an unused import or a shadowed name,
+        # which is what this rule is about.
+        for name in ("pyproject.toml", "setup.cfg", "tox.ini"):
+            for source in ctx.snapshot.by_name(name):
+                text = (source.text() or "").lower()
+                if any(
+                    marker in text
+                    for marker in ("[tool.ruff", "[flake8]", "[tool.pylint", "[pylint")
+                ):
+                    return []
+
+        manifests = ctx.snapshot.by_name("pyproject.toml", "setup.cfg")
+        return [
+            ctx.finding(
+                rule_id=self.id,
+                title="No Python linter configured",
+                description=(
+                    "A linter catches an entire class of defect — unused imports, "
+                    "shadowed names, unreachable code — before review. No ruff, "
+                    "flake8 or pylint configuration was found."
+                ),
+                category=Category.CONFIGURATION,
+                severity=Severity.LOW,
+                confidence=Confidence.HIGH,
+                file=manifests[0].path if manifests else None,
+                line=1 if manifests else None,
+                remediation=(
+                    "Add a `[tool.ruff]` section to pyproject.toml. Ruff is a "
+                    "single binary and covers most of flake8 and isort."
+                ),
+                references=["https://docs.astral.sh/ruff/"],
             )
         ]
 

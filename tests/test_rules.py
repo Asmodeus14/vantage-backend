@@ -14,7 +14,11 @@ from app.analysis.rules.dependencies import (
     coerce_version,
     resolved_versions_from_lockfile,
 )
-from app.analysis.rules.quality import DeepNestingRule, LongFileRule
+from app.analysis.rules.quality import (
+    DeepNestingRule,
+    LongFileRule,
+    LongFunctionRule,
+)
 from app.analysis.rules.react import MissingKeyRule
 from app.analysis.rules.secrets import (
     EnvNotIgnoredRule,
@@ -141,9 +145,15 @@ async def test_react_rules_do_not_run_on_non_react_projects(make_context):
 # Configuration gating — v2 told Python projects they needed ESLint
 # --------------------------------------------------------------------------
 
-async def test_linter_rule_skips_python_projects(make_context):
-    ctx = make_context({"main.py": "print(1)\n", "requirements.txt": "flask\n"})
-    assert NoLinterRule().applies(ctx) is False
+async def test_linter_rule_skips_ecosystems_it_cannot_advise(make_context):
+    """The gate is "do we know what a linter looks like here", not "is this
+    JavaScript". Go and Rust get no linter advice because no rule pack has
+    taught this what to look for; Python does, since one shipped."""
+    go = make_context({"main.go": "package main\n", "go.mod": "module demo\n"})
+    assert NoLinterRule().applies(go) is False
+
+    python = make_context({"main.py": "print(1)\n", "requirements.txt": "flask\n"})
+    assert NoLinterRule().applies(python) is True
 
 
 async def test_linter_rule_fires_for_node_without_config(make_context):
@@ -546,3 +556,73 @@ async def test_genuinely_nested_branches_are_still_reported(make_context):
     ctx = make_context({"src/go.js": code})
     findings = await DeepNestingRule().run(ctx)
     assert len(findings) == 1
+
+
+async def test_python_projects_are_told_when_they_have_no_linter(make_context):
+    """The Node-only gate was a blind spot: this API's own repository has no
+    linter and was never told so, because the check did not apply to it."""
+    ctx = make_context({"main.py": "print(1)\n", "requirements.txt": "fastapi\n"})
+    rule = NoLinterRule()
+    assert rule.applies(ctx) is True
+    findings = await rule.run(ctx)
+    assert len(findings) == 1
+    assert "python" in findings[0].title.lower()
+
+
+@pytest.mark.parametrize(
+    "files",
+    [
+        {"pyproject.toml": "[tool.ruff]\nline-length = 90\n"},
+        {"setup.cfg": "[flake8]\nmax-line-length = 90\n"},
+        {".ruff.toml": "line-length = 90\n"},
+        {".pylintrc": "[MESSAGES CONTROL]\n"},
+    ],
+)
+async def test_a_configured_python_linter_is_recognised(make_context, files):
+    ctx = make_context({"main.py": "print(1)\n", **files})
+    assert await NoLinterRule().run(ctx) == []
+
+
+async def test_a_formatter_is_not_a_linter(make_context):
+    """black and isort make code consistent; neither catches an unused import,
+    which is what this rule is about."""
+    ctx = make_context(
+        {"main.py": "print(1)\n", "pyproject.toml": "[tool.black]\nline-length = 90\n"}
+    )
+    assert len(await NoLinterRule().run(ctx)) == 1
+
+
+async def test_a_bare_setup_cfg_does_not_count_as_a_linter(make_context):
+    """It exists in most projects for packaging reasons; the section inside it
+    is what proves anything."""
+    ctx = make_context(
+        {"main.py": "print(1)\n", "setup.cfg": "[metadata]\nname = demo\n"}
+    )
+    assert len(await NoLinterRule().run(ctx)) == 1
+
+
+async def test_a_component_is_measured_by_its_logic_not_its_markup(make_context):
+    """A React component is mostly JSX. Counting those lines reported 24
+    components on a real frontend, each claiming its many branches were hard to
+    cover with tests — true of a long function, false of a long template."""
+    body = "\n".join(f"      <Row key={{i{n}}} label={{l{n}}} />" for n in range(200))
+    code = (
+        "export function Panel({ items }) {\n"
+        "  const total = items.length;\n"
+        "  return (\n"
+        "    <div>\n" + body + "\n"
+        "    </div>\n"
+        "  );\n"
+        "}\n"
+    )
+    ctx = make_context({"src/Panel.jsx": code})
+    assert await LongFunctionRule().run(ctx) == []
+
+
+async def test_a_genuinely_long_function_is_still_reported(make_context):
+    """The fix must not silence the rule it exists for."""
+    body = "\n".join(f"  const v{n} = compute({n});" for n in range(120))
+    ctx = make_context({"src/big.js": f"function big() {{\n{body}\n}}\n"})
+    findings = await LongFunctionRule().run(ctx)
+    assert len(findings) == 1
+    assert "big()" in findings[0].title

@@ -37,6 +37,36 @@ CONTROL_FLOW = re.compile(
     r"\b(?:if|else|for|while|switch|case|try|catch|finally|do)\b"
 )
 
+# A line that is JSX markup rather than logic: an opening or closing tag, a bare
+# attribute, or the punctuation that closes an element.
+MARKUP_LINE = re.compile(
+    r"""^(?:
+        </?[A-Za-z][\w.]*      # <div  </div  <Button
+      | /?>                    # />  >
+      | \{?\s*[A-Za-z_$][\w$]*=  # className=  key=
+      | [)}\]>;,\s]*$          # closing punctuation only
+    )""",
+    re.VERBOSE,
+)
+
+
+def _logic_lines(body: list[str]) -> int:
+    """Lines in ``body`` that are code rather than markup or blank.
+
+    JSX is a template, not control flow. A component that is long because it
+    renders a lot is a different thing from a function that is long because it
+    branches a lot, and only the second is what this rule is about.
+    """
+    count = 0
+    for line in body:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if MARKUP_LINE.match(stripped):
+            continue
+        count += 1
+    return count
+
 
 @register
 class LongFileRule:
@@ -116,8 +146,19 @@ class LongFunctionRule:
                     continue
                 end = _function_end(lines, start, source.language)
                 length = end - start
-                if length < LONG_FUNCTION_LINES:
+
+                # Measure the logic, not the markup.
+                #
+                # A React component is mostly JSX. Counting those lines reported
+                # 24 components on a real frontend, each carrying a rationale
+                # about branches being hard to cover with tests — true of a long
+                # function, false of a long template. The measurement was right
+                # and the explanation was wrong, which costs a reader's trust
+                # just as fast as a false positive.
+                logic = _logic_lines(lines[start:end])
+                if logic < LONG_FUNCTION_LINES:
                     continue
+                markup = length - logic
                 findings.append(
                     ctx.finding(
                         rule_id=self.id,
@@ -130,6 +171,13 @@ class LongFunctionRule:
                             f"A function this long usually has several distinct "
                             f"jobs and many branches, which makes each path hard "
                             f"to cover with tests."
+                            + (
+                                f" {logic} of these lines are logic; the other "
+                                f"{markup} are markup, which is not counted "
+                                f"towards the threshold."
+                                if markup > 0
+                                else ""
+                            )
                         ),
                         category=Category.QUALITY,
                         severity=Severity.LOW,
