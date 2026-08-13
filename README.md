@@ -11,6 +11,50 @@ The web client lives in a sibling repository,
 
 ---
 
+## The rules
+
+Every rule declares which projects it applies to, so a Python repository is
+never told it is missing ESLint — a specific complaint about the version this
+replaced, which ran every check unconditionally.
+
+| Rule | What it catches |
+|---|---|
+| `dep/known-vulnerability` | Resolves versions and queries **OSV.dev** per ecosystem. Direct and transitive, grouped per package with real CVE/GHSA ids. Transitive advisories are reported only at high/critical and downgraded one level, because you cannot bump them directly. |
+| `dep/react-dom-mismatch` | Compares resolved majors, not spec strings. |
+| `dep/no-lockfile` | Non-reproducible installs. |
+| `security/hardcoded-secret` | Provider-shaped tokens (AWS, GitHub, Stripe, Slack, private keys, JWTs, DB URLs) plus entropy-checked assignments. Values are redacted before they are stored or shown. |
+| `security/env-not-ignored` | `.env` present and not covered by `.gitignore`. |
+| `react/missing-list-key` | `.map()` rendering JSX with no `key`, evaluated per call site. |
+| `react/array-index-key` | An index key changes meaning whenever the list reorders. |
+| `react/dangerously-set-inner-html` | XSS surface, flagged for review. |
+| `python/mutable-default-argument` | `def f(items=[])` — evaluated once, then shared by every call. Reads wrapped signatures by paren depth, so code formatted by black is not missed. |
+| `python/bare-except` | `except:` also swallows `KeyboardInterrupt` and `SystemExit`. |
+| `python/subprocess-shell` | `shell=True` and `os.system` — an interpolated value becomes shell syntax. |
+| `python/unsafe-deserialisation` | `pickle.loads`, `yaml.load` without a `Loader`, `marshal.loads`. |
+| `quality/long-file`, `quality/long-function`, `quality/deep-nesting`, `quality/todo-markers` | Structural metrics measured over source with comments and string literals blanked, so `if` inside a comment does not count. |
+| `config/*` | Linter, tests, CI, TypeScript `strict`, README — each gated on the detected stack. |
+
+Every finding carries a **confidence** level; a heuristic match says so rather
+than presenting a guess as a certainty.
+
+The **security** rules skip test files. A suite exercising `pickle.loads` on
+purpose is not a vulnerability, and measured on `psf/requests` all seven
+deserialisation findings were tests testing deserialisation — seven
+unactionable findings is how a check teaches people to ignore its whole
+category. Correctness rules still scan tests, because a mutable default
+argument is a bug wherever it is.
+
+**Dependency scanning needs an exact version.** npm reads the lockfile; Python
+reads `poetry.lock`, or `==` pins in `requirements.txt` / `pyproject.toml`. A
+project declaring only ranges gets its dependencies listed but not scanned — a
+range cannot be resolved without the index, and guessing would report
+advisories for versions nobody installed.
+
+Adding one is the most common contribution: see
+[CONTRIBUTING.md](CONTRIBUTING.md#adding-a-rule).
+
+---
+
 ## Running locally
 
 Requires **Python 3.12+**.
