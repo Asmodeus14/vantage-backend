@@ -20,10 +20,12 @@ import httpx
 import app.analysis.rules  # noqa: F401  - registers every rule
 from app.analysis.base import ProjectFacts, RuleContext, all_rules
 from app.analysis.rules.dependencies import (
+    ResolvedDependency,
     collect_dependencies,
     parse_package_json,
     resolved_versions_from_lockfile,
 )
+from app.analysis.rules.python import collect_python_dependencies
 from app.analysis.scoring import compute_score, finding_penalty, severity_counts
 from app.config import Settings
 from app.ingest.filter import ANALYSABLE_LANGUAGES
@@ -253,10 +255,29 @@ class AnalysisEngine:
         return findings, project, dependencies, duration, [r.id for r in applicable]
 
     def _dependencies(self, ctx: RuleContext, findings: list[Finding]) -> list[DependencyInfo]:
-        if not ctx.facts.is_node:
+        collected: list = []
+
+        if ctx.facts.is_node:
+            resolved = resolved_versions_from_lockfile(ctx.snapshot)
+            collected += collect_dependencies(ctx, resolved)
+
+        # The Dependencies tab was empty for every Python project: the rule
+        # queried them for advisories but nothing listed them, so a project with
+        # no vulnerabilities looked like a project with no dependencies.
+        collected += [
+            ResolvedDependency(
+                name=name,
+                version_spec=spec,
+                resolved_version=version,
+                ecosystem="PyPI",
+                is_dev=False,
+                from_lockfile=version is not None and not spec.startswith("=="),
+            )
+            for name, spec, version in collect_python_dependencies(ctx)
+        ]
+
+        if not collected:
             return []
-        resolved = resolved_versions_from_lockfile(ctx.snapshot)
-        collected = collect_dependencies(ctx, resolved)
 
         vulnerable: dict[str, list[str]] = {}
         for finding in findings:

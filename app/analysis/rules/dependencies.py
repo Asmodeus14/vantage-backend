@@ -19,6 +19,11 @@ import re
 from typing import Any
 
 from app.analysis.base import ProjectFacts, RuleContext, register
+from app.analysis.rules.python import (
+    collect_python_dependencies,
+    normalise_name,
+    python_manifest_path,
+)
 from app.ingest.snapshot import SourceFile
 from app.schemas import Category, Confidence, DependencyInfo, Finding, Severity
 
@@ -183,15 +188,32 @@ class KnownVulnerabilityRule:
     category = Category.DEPENDENCIES
 
     def applies(self, ctx: RuleContext) -> bool:
-        return ctx.facts.is_node and ctx.settings.osv_enabled and ctx.http is not None
+        has_manifest = ctx.facts.is_node or "pip" in ctx.facts.package_managers
+        return has_manifest and ctx.settings.osv_enabled and ctx.http is not None
 
     async def run(self, ctx: RuleContext) -> list[Finding]:
         manifests = ctx.snapshot.by_name("package.json")
-        if not manifests:
+        python_manifest = python_manifest_path(ctx)
+        if not manifests and not python_manifest:
             return []
 
         resolved = resolved_versions_from_lockfile(ctx.snapshot)
-        direct = collect_dependencies(ctx, resolved)
+        direct = collect_dependencies(ctx, resolved) if manifests else []
+
+        # Python packages join the same batch. Everything downstream — the
+        # severity mapping, the per-package fingerprint, the UI — is already
+        # ecosystem-agnostic, so a second parallel rule would only duplicate it.
+        direct += [
+            ResolvedDependency(
+                name=name,
+                version_spec=spec or "(unpinned)",
+                resolved_version=version,
+                ecosystem="PyPI",
+                is_dev=False,
+                from_lockfile=False,
+            )
+            for name, spec, version in collect_python_dependencies(ctx)
+        ]
         direct_names = {d.name for d in direct}
 
         # Transitive packages come only from the lockfile. They are real risk
@@ -224,7 +246,12 @@ class KnownVulnerabilityRule:
             return []
 
         details = await self._fetch_details(ctx, vuln_ids)
-        manifest_path = manifests[0].path
+        # Per ecosystem: a finding about `requests` must point at
+        # requirements.txt, not at a package.json that may not even exist.
+        manifest_for = {
+            "npm": manifests[0].path if manifests else None,
+            "PyPI": python_manifest,
+        }
         findings: list[Finding] = []
 
         for package, ids in vuln_ids.items():
@@ -235,6 +262,7 @@ class KnownVulnerabilityRule:
                 continue
             info.vulnerabilities = list(ids)
             is_direct = package in direct_names
+            declared_in = manifest_for.get(info.ecosystem)
 
             # One finding per package, listing every advisory against it.
             # Emitting one per CVE produced several findings with identical
@@ -291,8 +319,12 @@ class KnownVulnerabilityRule:
                     confidence=(
                         Confidence.HIGH if info.from_lockfile else Confidence.MEDIUM
                     ),
-                    file=manifest_path if is_direct else None,
-                    line=_manifest_line(ctx, manifest_path, package) if is_direct else None,
+                    file=declared_in if is_direct else None,
+                    line=(
+                        _manifest_line(ctx, declared_in, package)
+                        if is_direct and declared_in
+                        else None
+                    ),
                     remediation=(
                         f"Upgrade {package} to {fixed} or later."
                         if fixed and is_direct
@@ -319,7 +351,11 @@ class KnownVulnerabilityRule:
         payload = {
             "queries": [
                 {
-                    "package": {"name": d.name, "ecosystem": "npm"},
+                    # From the dependency, not hardcoded: OSV keys advisories by
+                    # ecosystem, and asking it about `requests` on npm returns
+                    # nothing rather than an error — a silent miss, which is the
+                    # worst way for a security check to be wrong.
+                    "package": {"name": d.name, "ecosystem": d.ecosystem},
                     "version": d.resolved_version,
                 }
                 for d in dependencies
@@ -372,14 +408,30 @@ def _first_fixed_version(vuln: dict[str, Any]) -> str | None:
     return None
 
 
-def _manifest_line(ctx: RuleContext, manifest_path: str, package: str) -> int | None:
+def _manifest_line(ctx: RuleContext, manifest_path: str | None, package: str) -> int | None:
     """Locate the dependency's declaration line so the UI can jump to it.
 
     Matches the package only in *key* position. A substring search matched
     `"dev": "vite"` inside `scripts` and reported the wrong line.
     """
+    if manifest_path is None:
+        return None
     source = ctx.snapshot.get(manifest_path)
     if source is None:
+        return None
+
+    # Requirements files and pyproject are not JSON, and the key-position logic
+    # below would find nothing in them. Match the normalised name instead, since
+    # `Flask-SQLAlchemy` and `flask_sqlalchemy` are the same package and the
+    # advisory always names the normalised form.
+    if not manifest_path.endswith(".json"):
+        for number, line in enumerate(source.lines(), start=1):
+            stripped = line.strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            match = re.match(r"^[\"'\s]*([A-Za-z0-9._-]+)", stripped)
+            if match and normalise_name(match.group(1)) == package:
+                return number
         return None
 
     key = f'"{package}":'
