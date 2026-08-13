@@ -7,7 +7,7 @@ anchored to a file and line.
 FastAPI · Python 3.12 · SQLAlchemy 2 (async) · Postgres.
 
 The web client lives in a sibling repository,
-[`vantage-frontend`](https://github.com/Asmodeus14/vantage-frontend).
+[`vantage-frontend`](https://github.com/Asmodeus14/Vantage).
 
 ---
 

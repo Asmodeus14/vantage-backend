@@ -2,7 +2,7 @@
 
 FastAPI + Python 3.12, deployed to Render, backed by Neon Postgres. The web
 client is a separate repository with its own deploy pipeline; see
-[`vantage-frontend/docs/ARCHITECTURE.md`](https://github.com/Asmodeus14/vantage-frontend/blob/master/docs/ARCHITECTURE.md)
+[`vantage-frontend/docs/ARCHITECTURE.md`](https://github.com/Asmodeus14/Vantage/blob/master/docs/ARCHITECTURE.md)
 for the browser side.
 
 They stayed separate because they already were, with their own remotes and
