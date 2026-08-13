@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 
+from app.analysis.diffing import compare, is_comparable
 from app.analysis.engine import AnalysisEngine, compute_score, severity_counts
 from app.config import Settings
 from app.errors import VantageError
@@ -43,6 +44,7 @@ from app.ingest.snapshot import Snapshot
 from app.schemas import (
     AnalysisStage,
     Finding,
+    FindingDelta,
     IngestStats,
     ProgressEvent,
     Report,
@@ -251,7 +253,7 @@ class AnalysisRunner:
     ) -> None:
         snapshot = Snapshot.build(root)
 
-        findings, project, dependencies, duration = await asyncio.wait_for(
+        findings, project, dependencies, duration, rule_ids = await asyncio.wait_for(
             self.engine.analyse(snapshot, progress=job.emit),
             timeout=self.settings.analysis_timeout_seconds,
         )
@@ -285,7 +287,10 @@ class AnalysisRunner:
             ),
             activity=activity,
             truncated=truncated,
+            rule_ids=rule_ids,
         )
+
+        report.delta = await self._delta(report, owner_id=owner_id)
 
         await job.emit(
             ProgressEvent(stage=AnalysisStage.PERSISTING, message="Saving report")
@@ -303,6 +308,30 @@ class AnalysisRunner:
             )
         )
         await job.close()
+
+    async def _delta(
+        self, report: Report, *, owner_id: str | None = None
+    ) -> FindingDelta | None:
+        """Compare against the previous analysis of the same repository.
+
+        Like commit history, this is context on top of the findings rather than
+        the product itself, so a store hiccup must not lose a completed report.
+        The difference is that a failure here is silent: there is no honest way
+        to say "this comparison is partial", and a delta that omits half the
+        resolved findings would assert something false. Absent means "not
+        compared", which the UI already renders as nothing at all.
+        """
+        repository = report.source.repository
+        if repository is None:
+            return None
+        try:
+            previous = await get_store().latest_for(repository, owner_id=owner_id)
+        except Exception:
+            logger.exception("Could not load the previous report for %s", repository)
+            return None
+        if previous is None or not is_comparable(report, previous):
+            return None
+        return compare(report, previous)
 
     async def _activity(
         self,

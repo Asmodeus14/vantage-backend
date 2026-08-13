@@ -76,8 +76,32 @@ class RuleContext:
         snippet: str | None = None,
         remediation: str | None = None,
         references: list[str] | None = None,
+        key: str | None = None,
     ) -> Finding:
-        """Build a finding, filling in the snippet from the snapshot."""
+        """Build a finding, filling in the snippet from the snapshot.
+
+        ``key`` is the rule's own answer to "which problem is this, as distinct
+        from the others I report", and only affects :attr:`Finding.fingerprint`.
+        No single formula works across rule families, so the rule decides, and
+        when it supplies a key that key is the *whole* discriminator — file
+        included, or deliberately not:
+
+        - ``None`` (default) — fall back to ``file`` and ``line``. Correct for
+          rules emitting several findings per file with nothing else to tell
+          them apart, such as ``react/array-index-key``. Inserting code above
+          one of these does make it read as resolved-plus-new; that is accepted
+          and documented rather than papered over.
+        - ``source.path`` — the file alone identifies it, as for
+          ``quality/long-file``, whose line is always 1 and whose title carries
+          a changing measurement.
+        - ``""`` — the rule identifies it, with no location at all. For
+          project-wide findings like ``quality/todo-markers``, which anchors
+          itself to the first marker it happened to find; that file changes
+          when an unrelated file gains a TODO, so including it would be wrong.
+        - anything else — a discriminator that outlives the details, such as
+          the package name for ``dep/known-vulnerability``, which must survive
+          a version bump.
+        """
         snippet_start_line: int | None = None
         if snippet is None and file and line:
             source = self.snapshot.get(file)
@@ -92,8 +116,17 @@ class RuleContext:
             f"{rule_id}|{file or ''}|{line or 0}|{title}".encode()
         ).hexdigest()[:12]
 
+        # Identity across reports. `title` is never part of it: several rules
+        # put a measurement there — `quality/long-file` says "…is 1,050 lines
+        # long" — so one added line would read as a problem resolved and another
+        # appearing. Location is part of it only when the rule has nothing
+        # better to offer.
+        scope = key if key is not None else f"{file or ''}|{line or 0}"
+        fingerprint = hashlib.sha1(f"{rule_id}|{scope}".encode()).hexdigest()[:12]
+
         return Finding(
             id=digest,
+            fingerprint=fingerprint,
             rule_id=rule_id,
             title=title,
             description=description,

@@ -187,6 +187,31 @@ async def test_sub_second_durations_survive_a_round_trip(in_memory):
     assert (await in_memory.list())[0].duration_seconds == 0.42
 
 
+async def test_latest_for_returns_the_most_recent_run_of_that_repository(in_memory):
+    await in_memory.save(make_report("old", repository="a/b"))
+    await in_memory.save(make_report("other", repository="c/d"))
+    await in_memory.save(make_report("new", repository="a/b"))
+
+    latest = await in_memory.latest_for("a/b")
+    assert latest is not None and latest.id == "new"
+    assert await in_memory.latest_for("nobody/here") is None
+
+
+async def test_latest_for_never_crosses_owners(in_memory):
+    """Report diffing reads this. Scoped wrongly, a signed-in user's report
+    would be compared against a stranger's run of the same project — and the
+    resolved list would name findings from it."""
+    await in_memory.save(make_report("mine", repository="a/b"), owner_id="u1")
+    await in_memory.save(make_report("theirs", repository="a/b"), owner_id="u2")
+    await in_memory.save(make_report("anon", repository="a/b"))
+
+    assert (await in_memory.latest_for("a/b", owner_id="u1")).id == "mine"
+    assert (await in_memory.latest_for("a/b", owner_id="u2")).id == "theirs"
+    # None means *no owner*, not *any owner* — the same rule `list()` follows.
+    assert (await in_memory.latest_for("a/b")).id == "anon"
+    assert await in_memory.latest_for("a/b", owner_id="u3") is None
+
+
 async def test_memory_store_is_bounded():
     store = InMemoryReportStore(capacity=3)
     for i in range(5):

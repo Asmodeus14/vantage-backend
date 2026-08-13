@@ -60,6 +60,16 @@ class Finding(BaseModel):
     """
 
     id: str = Field(description="Stable within a report; used for AI actions.")
+    fingerprint: str = Field(
+        default="",
+        description=(
+            "Identity of the underlying problem *across* reports, so the same "
+            "issue can be recognised in a later run. Unlike `id` it deliberately "
+            "excludes `title` and, where the rule can supply a better "
+            "discriminator, `line` — both change without the problem changing. "
+            "Empty on reports produced before diffing existed."
+        ),
+    )
     rule_id: str = Field(description="e.g. 'js/prefer-let', 'dep/known-vulnerability'")
     title: str
     description: str
@@ -247,6 +257,45 @@ class RepositoryActivity(BaseModel):
     )
 
 
+class ResolvedFinding(BaseModel):
+    """A finding present in the previous report and absent from this one.
+
+    It carries its own copy of the display fields because, by definition, it is
+    not in ``Report.findings`` — there is nothing left to look it up in.
+    """
+
+    fingerprint: str
+    rule_id: str
+    title: str
+    file: str | None = None
+    severity: Severity
+
+
+class FindingDelta(BaseModel):
+    """What changed since the previous analysis of the same repository.
+
+    Computed once, at analysis time, and stored. Deriving it on read would let
+    the answer to "what changed" drift as newer reports arrive, so a report
+    someone bookmarked would quietly start saying something different.
+    """
+
+    previous_report_id: str
+    previous_created_at: datetime
+    new: list[str] = Field(
+        default_factory=list, description="Fingerprints of findings not seen before."
+    )
+    resolved: list[ResolvedFinding] = Field(default_factory=list)
+    unchanged: int = 0
+    new_rules: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Rules that ran this time but not last time. Their findings are all "
+            "technically new, which is misleading without this — the code may "
+            "not have changed at all."
+        ),
+    )
+
+
 class Report(BaseModel):
     id: str
     created_at: datetime
@@ -267,6 +316,21 @@ class Report(BaseModel):
     )
     truncated: bool = Field(
         default=False, description="True when findings were capped."
+    )
+    rule_ids: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Every rule that ran, including those that found nothing. Needed to "
+            "tell 'this rule is new' from 'this rule ran clean last time' — "
+            "deriving the set from findings cannot distinguish the two."
+        ),
+    )
+    delta: FindingDelta | None = Field(
+        default=None,
+        description=(
+            "Absent on a first analysis, on uploads, and when no comparable "
+            "earlier report is visible to this owner."
+        ),
     )
 
 

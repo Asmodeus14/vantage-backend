@@ -271,6 +271,10 @@ class KnownVulnerabilityRule:
             findings.append(
                 ctx.finding(
                     rule_id=self.id,
+                    # The package, not the version — a bump that does not clear
+                    # the advisory is the same unfixed problem, and the title
+                    # carries both the version and the advisory count.
+                    key=package,
                     title=(
                         f"{package}@{info.resolved_version} has {count} known {label}"
                     ),

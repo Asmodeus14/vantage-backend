@@ -113,6 +113,64 @@ database created by the earlier `create_all` era.
 
 ---
 
+## Finding identity
+
+"Is it getting better?" is the question a maintainer actually has, and a total
+count cannot answer it. That needs findings to be recognisable across runs.
+
+`Finding.id` cannot do this. It is `sha1(rule_id|file|line|title)`, and **both
+`line` and `title` move without the problem moving** — inserting an import
+shifts every line below it, and `quality/long-file` puts the measurement in the
+title (`"response.js is 1,169 lines long"`). Measured against real data,
+express 4.18.0 → 4.19.0 changed the title of 7 surviving findings and the line
+of 4 more, so an id-based comparison would have reported 12 resolved and 12 new
+where the true answer is 1 and 1.
+
+So findings also carry a `fingerprint`, and **no single formula produces it** —
+the rule supplies the discriminator through `key=` on `RuleContext.finding()`:
+
+| `key` | Identity is | Used by |
+|---|---|---|
+| omitted | file **and** line | `react/*` — several per file, nothing else to tell them apart |
+| `source.path` | the file | `quality/long-file`, `quality/deep-nesting` |
+| `f"{path}\|{name}"` | the named thing in that file | `quality/long-function` |
+| the package name | the package, not its version | `dep/known-vulnerability` |
+| `""` | the rule alone, no location | `quality/todo-markers`, which anchors to whichever marker it found first |
+
+`title` is never part of it.
+
+The comparison itself lives in `analysis/diffing.py` and runs **at analysis
+time**, in the runner, not on read. Deriving it on read would let the answer
+drift as newer reports arrived, so a report someone bookmarked would quietly
+start describing a different comparison than the one it was created with.
+
+`is_comparable` is deliberately strict, because a misleading comparison is
+worse than none: uploads are excluded (two ZIPs of the same name may be
+unrelated projects), so are different repositories, a report against itself, and
+either side being `truncated` — everything past the findings cap was never
+written down and would read as resolved.
+
+The previous report is looked up with `ReportStore.latest_for`, **scoped by
+owner on the same terms as `list`**: `None` means *no owner*, not *any owner*.
+Without that, a signed-in user's report would be compared against a stranger's
+run of the same project, and the resolved list would name findings from it.
+
+Two things this deliberately does not do. A **renamed file** reads as wholly
+resolved plus wholly new; rename detection is out of scope. And a **rule added
+between runs** makes all of its findings "new", which is true and misleading at
+once — so `Report.rule_ids` records every rule that ran, *including those that
+found nothing*, and `FindingDelta.new_rules` lets the UI caption it. The set has
+to be stored rather than derived from findings: a rule that ran clean leaves
+nothing to derive it from, and would be indistinguishable from one that did not
+run.
+
+No migration was needed. `payload` is JSONB and both fields are defaulted
+Pydantic fields, so older rows validate unchanged — their findings simply have
+an empty fingerprint, which `compare` skips rather than treating as a shared key
+that makes every legacy finding equal to every other.
+
+---
+
 ## Commit history
 
 `ingest/history.py` reads commit activity from the GitHub REST API. It cannot

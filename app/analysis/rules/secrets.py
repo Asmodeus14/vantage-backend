@@ -199,6 +199,13 @@ class HardcodedSecretRule:
     ) -> Finding:
         return ctx.finding(
             rule_id=self.id,
+            # The credential itself is the identity, so it survives being moved
+            # within the file — and two different keys in one file stay two
+            # findings. `redact` is used rather than the raw value: it is
+            # already shown in the description, so the fingerprint reveals
+            # nothing that is not public. A rotated-but-still-committed value
+            # therefore reads as resolved-plus-new, which is the right emphasis.
+            key=f"{path}|{label}|{redact(value)}",
             title=f"Possible {label} committed to the repository",
             description=(
                 f"A value matching {label} appears at {path}:{line}. "

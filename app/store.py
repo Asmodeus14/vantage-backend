@@ -64,6 +64,21 @@ class ReportStore(Protocol):
     async def owner_of(self, report_id: str) -> str | None: ...
     async def delete(self, report_id: str) -> None: ...
 
+    async def latest_for(
+        self, repository: str, *, owner_id: str | None = None
+    ) -> Report | None:
+        """The most recent report of ``repository`` belonging to ``owner_id``.
+
+        Used to diff a new analysis against the last one. Scoped by owner on
+        exactly the same terms as :meth:`list` — ``None`` means *no owner*, not
+        *any owner* — so a signed-in user is never compared against someone
+        else's run of the same project.
+
+        Returns the full report, not a summary: the comparison needs every
+        fingerprint, and summaries do not carry findings.
+        """
+        ...
+
     async def list(
         self,
         limit: int = 25,
@@ -145,6 +160,17 @@ class InMemoryReportStore:
 
     async def owner_of(self, report_id: str) -> str | None:
         return self._owners.get(report_id)
+
+    async def latest_for(
+        self, repository: str, *, owner_id: str | None = None
+    ) -> Report | None:
+        for report in reversed(list(self._reports.values())):
+            if report.source.repository != repository:
+                continue
+            if self._owners.get(report.id) != owner_id:
+                continue
+            return report
+        return None
 
     async def delete(self, report_id: str) -> None:
         self._reports.pop(report_id, None)
@@ -245,6 +271,28 @@ class PostgresReportStore:
                 )
             )
         return summaries
+
+    async def latest_for(
+        self, repository: str, *, owner_id: str | None = None
+    ) -> Report | None:
+        maker = get_sessionmaker()
+        if maker is None:  # pragma: no cover
+            raise RuntimeError("Database is not configured")
+
+        query = (
+            select(ReportRow)
+            .where(ReportRow.repository == repository)
+            .where(
+                ReportRow.owner_id.is_(None)
+                if owner_id is None
+                else ReportRow.owner_id == owner_id
+            )
+            .order_by(ReportRow.created_at.desc())
+            .limit(1)
+        )
+        async with maker() as session:
+            row = (await session.execute(query)).scalars().first()
+        return Report.model_validate(row.payload) if row is not None else None
 
     async def delete(self, report_id: str) -> None:
         maker = get_sessionmaker()

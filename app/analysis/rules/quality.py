@@ -54,6 +54,10 @@ class LongFileRule:
             findings.append(
                 ctx.finding(
                     rule_id=self.id,
+                    # One per file, and the length is in the title — so the file
+                    # alone is the identity. Keyed on `line` this would resolve
+                    # and reappear on every edit.
+                    key=source.path,
                     title=f"{source.name} is {count:,} lines long",
                     description=(
                         f"Files above roughly {LONG_FILE_LINES} lines tend to "
@@ -111,7 +115,11 @@ class LongFunctionRule:
                 findings.append(
                     ctx.finding(
                         rule_id=self.id,
-                        title=f"{name}() spans {length} lines",
+                        # The function's name outlives both its length and its
+                    # position. Qualified by path, since the same name recurs
+                    # across files.
+                    key=f"{source.path}|{name}",
+                    title=f"{name}() spans {length} lines",
                         description=(
                             f"A function this long usually has several distinct "
                             f"jobs and many branches, which makes each path hard "
@@ -185,6 +193,9 @@ class DeepNestingRule:
                 findings.append(
                     ctx.finding(
                         rule_id=self.id,
+                        # One per file; `worst_line` moves as the deepest block
+                        # moves, without the file becoming a different problem.
+                        key=source.path,
                         title=f"{source.name} nests {worst} levels deep",
                         description=(
                             "Deep nesting forces a reader to hold several "
@@ -228,6 +239,10 @@ class TodoDensityRule:
         return [
             ctx.finding(
                 rule_id=self.id,
+                # Project-wide and singular, but anchored at the first marker
+                # found — a location that moves whenever an unrelated file gains
+                # a TODO. Empty key: the rule identifies it on its own.
+                key="",
                 title=f"{len(hits)} unresolved TODO/FIXME markers",
                 description=(
                     f"The codebase contains {len(hits)} TODO, FIXME, HACK or XXX "

@@ -192,7 +192,13 @@ class AnalysisEngine:
         snapshot: Snapshot,
         *,
         progress: ProgressCallback | None = None,
-    ) -> tuple[list[Finding], ProjectInfo, list[DependencyInfo], float]:
+    ) -> tuple[list[Finding], ProjectInfo, list[DependencyInfo], float, list[str]]:
+        """Findings, project info, dependencies, elapsed seconds, rules run.
+
+        The rule-id list includes rules that found nothing. Report diffing needs
+        it to distinguish "this rule is new" from "this rule ran clean last
+        time", which cannot be recovered from the findings alone.
+        """
         emit = progress or _noop
         started = time.monotonic()
 
@@ -244,7 +250,7 @@ class AnalysisEngine:
 
         findings = self._prioritise(findings)
         duration = time.monotonic() - started
-        return findings, project, dependencies, duration
+        return findings, project, dependencies, duration, [r.id for r in applicable]
 
     def _dependencies(self, ctx: RuleContext, findings: list[Finding]) -> list[DependencyInfo]:
         if not ctx.facts.is_node:
