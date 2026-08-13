@@ -82,6 +82,30 @@ Any path arriving from a URL is normalised by `app/source/providers.py::safe_pat
 before either source provider sees it, because one interpolates into a GitHub
 URL and the other into a SQL parameter.
 
+### A public instance cannot read private code
+
+Anonymous callers fall back to the server's `GITHUB_TOKEN`. Scoping that token
+to public repositories is the first line of defence and the one we recommend —
+but the code no longer depends on it having been done:
+
+- **Analysis** refuses a private repository unless the credentials came from a
+  signed-in user, who has already proved to GitHub that they can see it. This
+  costs nothing: the repository metadata is already fetched for the size check,
+  and `private` is in the same response.
+- **Reading source** refuses too, from a flag recorded on the report at analysis
+  time rather than a fresh API call — a guard that needed the network would fail
+  open exactly when the rate limit is exhausted.
+
+The second exists because the first cannot cover it: a signed-in user may
+analyse their own private repository and share the report link. The report stays
+readable, because findings quote a few lines; its source does not, because the
+viewer serves whole files.
+
+**Please still scope the token.** Defence in depth means both, not either.
+Create a fine-grained token with *Repository access → Public Repositories*, not
+a classic PAT — `repo` grants read **and write** to every private repository on
+the account.
+
 ## Known and accepted
 
 Reporting these is not necessary; they are documented decisions.
