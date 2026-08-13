@@ -387,6 +387,19 @@ class SessionCreated(BaseModel):
 # Health
 # --------------------------------------------------------------------------
 
+class PingResponse(BaseModel):
+    """Liveness only. Deliberately carries no dependency status.
+
+    An uptime monitor should be able to read this without the answer depending
+    on the database, so keeping a free-tier service awake does not also keep the
+    database awake.
+    """
+
+    status: Literal["alive"] = "alive"
+    version: str
+    timestamp: datetime
+
+
 class DependencyHealth(BaseModel):
     configured: bool
     available: bool

@@ -117,7 +117,8 @@ Full schema at `/docs`. Summary:
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/api/health` | Never calls the model. Reports AI, database, schema and sign-in state. |
+| `GET` | `/api/health` | Readiness. Never calls the model. Reports AI, database, schema and sign-in state. |
+| `GET` | `/api/ping` | Liveness. Touches nothing — see [Keeping a free instance awake](#keeping-a-free-instance-awake). |
 | `POST` | `/api/analyze/repository` | Returns `{job_id}` immediately (202). Rate limited 20/hr. |
 | `POST` | `/api/analyze/upload` | Multipart ZIP. 10/hr. |
 | `GET` | `/api/analyze/{job_id}/events` | Server-Sent Events: real per-stage progress. |
@@ -184,7 +185,7 @@ destructive capability held by anyone it was ever shared with.
 ## Testing
 
 ```bash
-python -m pytest -q                              # 196 tests
+python -m pytest -q                              # 198 tests
 python -m pytest --collect-only -q | tail -1     # current count
 ```
 
@@ -218,6 +219,29 @@ Set in the dashboard (all marked `sync: false`): `GEMINI_API_KEY`,
 
 Free tiers sleep when idle. The client reports a waking backend rather than
 appearing hung.
+
+### Keeping a free instance awake
+
+Render's free tier spins a service down after ~15 minutes of inactivity, and the
+cold start that follows is around a minute. An uptime monitor (UptimeRobot or
+similar) pinging every 10 minutes prevents it.
+
+**Point it at `/api/ping`, not `/api/health`.** Health is the obvious choice and
+it is a trap: it probes the database on a 15-second cache, so a ping every few
+minutes always misses the cache and issues a real query. Your database then
+never auto-suspends either — and on a plan billed by compute time, keeping it
+awake around the clock is the expensive half of the mistake. `/api/ping` touches
+nothing.
+
+Two things worth knowing before you set this up:
+
+- Render's free allowance is roughly 750 instance-hours per month against 730
+  hours in a month. One always-on service just fits, with nothing spare for a
+  second.
+- A monitor on `/api/ping` reports liveness only. It will keep saying "up" for a
+  service whose database has been unreachable for a week. If you want alerting
+  rather than just keep-alive, watch `/api/health` **as a separate, less
+  frequent check** and alert on `status: "degraded"`.
 
 ---
 

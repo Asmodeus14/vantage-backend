@@ -83,6 +83,60 @@ def test_health_never_calls_the_model(spy):
     assert spy.status_calls >= 25, "it should still report provider status"
 
 
+def test_ping_never_touches_the_database(monkeypatch):
+    """The whole reason `/api/ping` exists.
+
+    An uptime monitor keeping a free-tier host awake would otherwise be pointed
+    at `/api/health`, which probes the database on a 15-second cache — so a ping
+    every few minutes always misses the cache, issues a real query, and keeps
+    the database from ever auto-suspending too.
+    """
+    probes = 0
+
+    async def counting_probe():
+        nonlocal probes
+        probes += 1
+        return True, None
+
+    monkeypatch.setattr(health_module, "probe_database", counting_probe)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        database_url="postgresql+asyncpg://user:pass@host/db"
+    )
+    health_module._db_cache = None
+    try:
+        with TestClient(app) as client:
+            for _ in range(30):
+                response = client.get("/api/ping")
+                assert response.status_code == 200
+
+        assert probes == 0, "ping must not probe the database"
+        assert response.json()["status"] == "alive"
+        assert response.json()["version"]
+    finally:
+        app.dependency_overrides.clear()
+        health_module._db_cache = None
+
+
+def test_ping_answers_even_when_the_database_is_down(monkeypatch):
+    """Liveness, not readiness. A monitor watching this is asking whether the
+    process is up; `/api/health` is where a degraded dependency is reported."""
+
+    async def failing_probe():
+        raise RuntimeError("database is unreachable")
+
+    monkeypatch.setattr(health_module, "probe_database", failing_probe)
+    app.dependency_overrides[get_settings] = lambda: Settings(
+        database_url="postgresql+asyncpg://user:pass@host/db"
+    )
+    health_module._db_cache = None
+    try:
+        with TestClient(app) as client:
+            assert client.get("/api/ping").status_code == 200
+    finally:
+        app.dependency_overrides.clear()
+        health_module._db_cache = None
+
+
 def test_health_reports_unconfigured_ai_without_failing(monkeypatch):
     """No API key is a normal state, not an outage."""
     from app.ai.provider import NullProvider
