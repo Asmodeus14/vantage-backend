@@ -223,14 +223,13 @@ class HardcodedSecretRule:
                     # the default view and out of the score cap. A credential
                     # that is genuinely leaked in a test directory is a real
                     # leak, so dropping it entirely would be the worse error.
+                    is_fixture = _is_test_fixture_key(source.path, label)
                     confidence = (
-                        Confidence.MEDIUM
-                        if _is_test_fixture_key(source.path, label)
-                        else Confidence.HIGH
+                        Confidence.MEDIUM if is_fixture else Confidence.HIGH
                     )
                     findings.append(
-                        self._finding(ctx, source.path, number, label, value, severity,
-                                      confidence)
+                        self._finding(ctx, source.path, number, label, value,
+                                      severity, confidence, fixture=is_fixture)
                     )
                     matched = True
                     break
@@ -286,6 +285,7 @@ class HardcodedSecretRule:
         value: str,
         severity: Severity,
         confidence: Confidence,
+        fixture: bool = False,
     ) -> Finding:
         return ctx.finding(
             rule_id=self.id,
@@ -296,21 +296,49 @@ class HardcodedSecretRule:
             # nothing that is not public. A rotated-but-still-committed value
             # therefore reads as resolved-plus-new, which is the right emphasis.
             key=f"{path}|{label}|{redact(value)}",
-            title=f"Possible {label} committed to the repository",
+            title=(
+                f"{label} in a test fixture"
+                if fixture
+                else f"Possible {label} committed to the repository"
+            ),
             description=(
-                f"A value matching {label} appears at {path}:{line}. "
-                f"Detected value: {redact(value)}. Anything committed to git "
-                f"remains recoverable from history even after being deleted."
+                (
+                    f"A value matching {label} appears at {path}:{line}. Its "
+                    "path looks like a test fixture, and committing a "
+                    "throwaway certificate to exercise TLS is normal — so this "
+                    "is reported for confirmation rather than as an incident, "
+                    "and it does not affect the score."
+                )
+                if fixture
+                else (
+                    f"A value matching {label} appears at {path}:{line}. "
+                    f"Detected value: {redact(value)}. Anything committed to "
+                    "git remains recoverable from history even after being "
+                    "deleted."
+                )
             ),
             category=Category.SECRET,
             severity=severity,
             confidence=confidence,
             file=path,
             line=line,
+            # Advice has to match the reading. Telling someone to revoke and
+            # rotate an expired test CA is the kind of wrong instruction that
+            # teaches people to distrust the whole category.
             remediation=(
-                "Revoke and rotate this credential, then load it from an "
-                "environment variable. Removing the line is not sufficient — "
-                "the value stays in git history until it is purged."
+                (
+                    "If this is a test certificate, nothing needs doing — it is "
+                    "listed so the assumption is visible rather than silent. If "
+                    "it is a real key that happens to live under this path, "
+                    "revoke and rotate it: the value stays in git history until "
+                    "that history is purged."
+                )
+                if fixture
+                else (
+                    "Revoke and rotate this credential, then load it from an "
+                    "environment variable. Removing the line is not sufficient — "
+                    "the value stays in git history until it is purged."
+                )
             ),
             references=["https://docs.github.com/code-security/secret-scanning"],
         )

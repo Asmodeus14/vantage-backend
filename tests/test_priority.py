@@ -385,3 +385,28 @@ async def test_a_real_credential_inside_a_test_file_is_not_downgraded(tmp_path: 
     findings = await HardcodedSecretRule().run(ctx)
     assert findings
     assert all(f.confidence is Confidence.HIGH for f in findings)
+
+
+async def test_fixture_key_advice_matches_the_reading(tmp_path: Path):
+    """Advice has to match the confidence.
+
+    Telling someone to "revoke and rotate" an expired test CA is the kind of
+    wrong instruction that teaches people to distrust the whole category — and
+    it was doing exactly that while the finding itself had already been
+    downgraded.
+    """
+    findings = await _keys_in(tmp_path, "tests/certs/valid/server/server.key")
+    assert len(findings) == 1
+    finding = findings[0]
+
+    assert "test fixture" in finding.title
+    assert "does not affect the score" in finding.description
+    assert "nothing needs doing" in finding.remediation
+    # Still says what to do if the assumption is wrong.
+    assert "revoke and rotate" in finding.remediation.lower()
+
+
+async def test_a_real_leak_still_gets_unambiguous_advice(tmp_path: Path):
+    findings = await _keys_in(tmp_path, "src/config/production.key")
+    assert "Revoke and rotate this credential" in findings[0].remediation
+    assert "nothing needs doing" not in findings[0].remediation
