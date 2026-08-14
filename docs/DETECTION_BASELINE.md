@@ -60,9 +60,9 @@ Security and secret findings, before and after the fixes below.
 
 | repository | before | after | score after |
 |---|---|---|---|
+| `juice-shop/juice-shop` | 76 | **28** | 39 F |
+| `pallets-eco/flask-security` | 11 | **3** | 39 F |
 | `hagopj13/node-express-boilerplate` | 3 | **0** | 100 A |
-| `pallets-eco/flask-security` | 11 | **6** | 39 F |
-| `juice-shop/juice-shop` | 76 | **67** | 39 F |
 | `payatu/Tiredful-API` | 3 | **1** | 39 F |
 | `nVisium/django.nV` | 2 | **1** | 85 B |
 | `miguelgrinberg/microblog` | 5 | 5 | 78 C |
@@ -70,17 +70,22 @@ Security and secret findings, before and after the fixes below.
 | `santiq/bulletproof-nodejs` | 0 | 0 | 97 A |
 | `steven-tey/precedent` | 0 | 0 | 94 A |
 | `realpython/flask-boilerplate` | 0 | 0 | 96 A |
-| **total** | **103** | **83** | |
+| **total** | **103** | **41** | |
 
-Twenty findings removed, **every one a false positive**, and no true positive
-lost anywhere. `node-express-boilerplate` went from 69 D to 100 A, which is the
-correct score for it.
+Sixty-two findings removed, **every one a false positive**, and no true
+positive lost anywhere. `node-express-boilerplate` went from 69 D to 100 A,
+which is the correct score for it.
 
-The reductions on the *vulnerable* repositories are vendored code, not missed
-vulnerabilities — `Tiredful-API` dropped a finding in a bundled syntax
-highlighter and one in `coreapi-0.1.0.js`, `django.nV` one in a jQuery
-datepicker. `Tiredful-API` still scores 39 F, now on the strength of the real
-SQL injection in `health/views.py` rather than a bundle nobody would edit.
+The reductions on the *vulnerable* repositories are vendored code and test
+fixtures, not missed vulnerabilities. `juice-shop` still scores 39 F, and its
+three HIGH-confidence findings are its three most famous vulnerabilities:
+
+    routes/login.ts:34      SQL injection via req.body.email
+    routes/verify.ts:119    jwt.decode(token), unverified
+    lib/insecurity.ts:53    expressJwt({ secret: '' + Math.random() })
+
+`Tiredful-API` likewise scores 39 F on the real SQL injection in
+`health/views.py`, rather than on a bundle nobody would edit.
 
 ---
 
@@ -161,6 +166,36 @@ neighbouring line still cannot reach it, because the name has to match — and
 that case has its own test.
 
 It now scores 39 F, named on the real injection in `health/views.py`.
+
+### Test fixtures, which the secrets rule had never heard of
+
+This one is a correction to an earlier version of this document, which claimed
+precision was settled on the strength of hand-reviewing the *ordinary* half of
+the corpus. `juice-shop` produced 61 secret findings and none of them had been
+read. Forty-five were in `test/`, and all three HIGH-confidence ones were JWTs
+inside `*.spec.ts`:
+
+```ts
+localStorage.setItem('token', 'eyJhbGciOiJIUzI1NiIs...')   // app.guard.spec.ts
+const password = 'EinBelegtesBrotMitSchinkenSCHINKEN!'      // 2fa.test.ts
+password: 'IamUsedForTesting'                               // users.yml
+```
+
+The security rules had excluded test files from the start; this module never
+learned to. Two changes, and the split between them is the point:
+
+* **The generic branch does not survive a test file.** It matches a
+  credential-ish *name* plus entropy, and in a test that is a fixture
+  essentially every time.
+* **Provider-shaped tokens still do**, with one exception. Nobody invents a
+  plausible `AKIA…` to exercise a code path, so an AWS key in a test is a leak
+  and keeps HIGH confidence. A JWT is the opposite — trivially hand-minted,
+  carrying no secret by itself, and the standard way to drive an authenticated
+  component test — so only that type is softened, and only in tests.
+
+A blanket "skip tests" would have been wrong, and briefly was: it contradicted
+an existing test asserting an AWS key in a test file is a real leak, which is
+how the over-broad version was caught.
 
 ---
 

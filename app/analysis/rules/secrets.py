@@ -192,6 +192,37 @@ def _is_test_fixture_key(path: str, label: str) -> bool:
     return bool(_FIXTURE_PATH.search(path) and _KEY_ARTEFACT.search(path))
 
 
+# A test or spec file. The security rules have excluded these from the start;
+# this module never learned to.
+_TEST_FILE = re.compile(
+    r"(^|/)(tests?|testing|__tests__|spec|e2e)/"
+    r"|(^|/)(test_[^/]+|[^/]+_test)\.py$"
+    r"|\.(test|spec)\.[jt]sx?$",
+    re.IGNORECASE,
+)
+
+
+def is_test_file(path: str) -> bool:
+    return bool(_TEST_FILE.search(path))
+
+
+# Token types routinely *fabricated* for tests, as opposed to leaked into them.
+#
+# This distinction matters and a blanket rule gets it wrong in one direction or
+# the other. An `AKIA…` in a test file is a leaked AWS key — nobody invents a
+# plausible one to exercise a code path, and the earlier decision to keep those
+# at HIGH everywhere was right.
+#
+# A JWT is the opposite. It is trivially hand-minted, carries no secret by
+# itself, and is the standard way to drive an authenticated component test.
+# All three of `juice-shop`'s HIGH-confidence secrets were JWTs inside
+# `*.spec.ts`, set on `localStorage` to render a logged-in view.
+#
+# So only this list is softened in tests; every other provider pattern keeps
+# its certainty wherever it appears.
+FABRICATED_IN_TESTS = frozenset({"JSON Web Token"})
+
+
 @register
 class HardcodedSecretRule:
     id = "security/hardcoded-secret"
@@ -259,8 +290,18 @@ class HardcodedSecretRule:
                     # that is genuinely leaked in a test directory is a real
                     # leak, so dropping it entirely would be the worse error.
                     is_fixture = _is_test_fixture_key(source.path, label)
+                    # A provider-shaped token in a test keeps its severity —
+                    # an AWS key committed in a test is a leaked AWS key — but
+                    # loses the certainty. Measured on `juice-shop`, all three
+                    # HIGH-confidence secrets were JWTs inside `*.spec.ts`,
+                    # set on `localStorage` to drive an Angular component test.
+                    fabricated = (
+                        label in FABRICATED_IN_TESTS and is_test_file(source.path)
+                    )
                     confidence = (
-                        Confidence.MEDIUM if is_fixture else Confidence.HIGH
+                        Confidence.MEDIUM
+                        if (is_fixture or fabricated)
+                        else Confidence.HIGH
                     )
                     findings.append(
                         self._finding(ctx, source.path, number, label, value,
@@ -274,6 +315,23 @@ class HardcodedSecretRule:
 
                 assignment = ASSIGNMENT.search(line)
                 if not assignment:
+                    continue
+
+                # The generic heuristic does not survive a test file.
+                #
+                # Unlike a provider-shaped token, this branch matches on a
+                # credential-ish *name* plus entropy — `password = '...'` —
+                # and in a test that is a fixture essentially every time.
+                # `juice-shop` produced 45 of these from `test/` alone:
+                # `password = 'EinBelegtesBrotMitSchinkenSCHINKEN!'`,
+                # `totpSecret = 'KDR5FXSOLNV6A5UAQYCKROSJZF7SVML7'`. None is a
+                # leak, and forty-five of them is how a category stops being
+                # read.
+                #
+                # Deliberately narrower than "skip tests": the provider
+                # patterns above still fire here, because their shape is
+                # conclusive regardless of which directory they sit in.
+                if is_test_file(source.path):
                     continue
                 value = assignment.group("value")
 

@@ -449,3 +449,65 @@ async def test_a_jwt_that_is_not_an_example_is_still_reported(tmp_path: Path):
     ctx = _secret_ctx(tmp_path, f'const SESSION = "{JWT}";\n')
     findings = await HardcodedSecretRule().run(ctx)
     assert len(findings) == 1
+
+
+# --------------------------------------------------------------------------
+# Test files, in the secrets rule
+# --------------------------------------------------------------------------
+
+async def test_a_credential_shaped_assignment_in_a_test_is_a_fixture(tmp_path: Path):
+    """`juice-shop` produced 45 of these from `test/` alone.
+
+    The generic branch matches a credential-ish *name* plus entropy —
+    `password = '...'` — and in a test that is a fixture essentially every
+    time: `password = 'EinBelegtesBrotMitSchinkenSCHINKEN!'`,
+    `totpSecret = 'KDR5FXSOLNV6A5UAQYCKROSJZF7SVML7'`.
+    """
+    for path in ("test/api/2fa.test.ts", "tests/test_login.py", "src/auth.spec.ts"):
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("const password = 'EinBelegtesBrotMitSchinken!'\n", newline="")
+
+    ctx = RuleContext(
+        snapshot=Snapshot.build(tmp_path),
+        facts=ProjectFacts(languages={"javascript", "python"}),
+        settings=Settings(),
+    )
+    assert await HardcodedSecretRule().run(ctx) == []
+
+
+async def test_the_same_assignment_outside_a_test_is_still_reported(tmp_path: Path):
+    ctx = _secret_ctx(tmp_path, "const password = 'EinBelegtesBrotMitSchinken!'\n")
+    assert len(await HardcodedSecretRule().run(ctx)) == 1
+
+
+async def test_a_jwt_in_a_spec_file_is_a_fixture_but_an_aws_key_is_not(tmp_path: Path):
+    """The two are not the same, and a blanket rule gets one of them wrong.
+
+    Nobody invents a plausible `AKIA…` to exercise a code path, so one in a
+    test is a leak. A JWT is trivially hand-minted, carries no secret by
+    itself, and is the standard way to drive an authenticated component test —
+    all three of `juice-shop`'s HIGH-confidence secrets were JWTs in
+    `*.spec.ts`, set on `localStorage` to render a logged-in view.
+    """
+    JWT = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIn0."
+        "TJVA95OrM7E2cBab30RMHrHDcEfxjoYZgeFONFh7HgQ"
+    )
+    spec = tmp_path / "frontend" / "src" / "app.guard.spec.ts"
+    spec.parent.mkdir(parents=True, exist_ok=True)
+    spec.write_text(f"localStorage.setItem('token', '{JWT}')\n", newline="")
+    aws = tmp_path / "test" / "aws.test.ts"
+    aws.parent.mkdir(parents=True, exist_ok=True)
+    aws.write_text('const key = "AKIA3F7XQ2LMWDZP9TVB";\n', newline="")
+
+    ctx = RuleContext(
+        snapshot=Snapshot.build(tmp_path),
+        facts=ProjectFacts(languages={"javascript", "typescript"}),
+        settings=Settings(),
+    )
+    by_file = {f.file: f for f in await HardcodedSecretRule().run(ctx)}
+
+    assert by_file["frontend/src/app.guard.spec.ts"].confidence is Confidence.MEDIUM
+    assert by_file["test/aws.test.ts"].confidence is Confidence.HIGH
