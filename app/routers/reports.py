@@ -30,12 +30,22 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 
 from app.analysis.scoring import compute_score
-from app.auth.dependencies import NotAuthorised, current_user
+from app.auth.dependencies import NotAuthorised, current_user, require_user
 from app.auth.store import AuthenticatedUser
+from app.config import Settings, get_settings
 from app.errors import ReportNotFoundError
+from app.export.pr_comment import render_comment
 from app.export.sarif import to_sarif
+from app.ingest.pull_request import (
+    fetch_pull_request,
+    parse_pull_request_url,
+    upsert_comment,
+)
+from app.routers.analyze import _credentials_for
 from app.schemas import (
     Finding,
+    PullRequestCommentRequest,
+    PullRequestCommentResult,
     Report,
     ReportSummary,
     Suppression,
@@ -198,6 +208,48 @@ async def get_report_sarif(report_id: str) -> Response:
                 f'attachment; filename="{report_id}.vantage.sarif"'
             )
         },
+    )
+
+
+@router.post("/{report_id}/pull-request-comment", response_model=PullRequestCommentResult)
+async def comment_on_pull_request(
+    report_id: str,
+    body: PullRequestCommentRequest,
+    user: AuthenticatedUser = Depends(require_user),
+    settings: Settings = Depends(get_settings),
+) -> PullRequestCommentResult:
+    """Leave one consolidated comment on a pull request.
+
+    Posted as the signed-in user, on their own token and their own rate limit,
+    reaching exactly the repositories they already granted. Sign-in is required
+    because there is no anonymous identity that could write to someone's pull
+    request — and GitHub, not this endpoint, decides whether they may.
+
+    The report is read with its owner's suppressions applied, so an accepted
+    finding does not reappear in the comment as though nobody had looked at it.
+    """
+    store = get_store()
+    report = await store.get(report_id)
+    report = await _apply_suppressions(report, await store.owner_of(report_id))
+
+    ref = parse_pull_request_url(body.pull_request_url)
+    credentials = _credentials_for(user, settings)
+
+    # Resolved before commenting so the comment names the commit it describes.
+    # A comment that says "main" cannot be checked against anything later.
+    info = await fetch_pull_request(ref, settings, credentials)
+
+    markdown = render_comment(
+        report,
+        report_url=f"{settings.app_base_url.rstrip('/')}/r/{report.id}",
+        head_sha=info.head_sha,
+    )
+    comment_url = await upsert_comment(ref, markdown, settings, credentials)
+
+    return PullRequestCommentResult(
+        comment_url=comment_url,
+        pull_request_url=info.html_url or body.pull_request_url,
+        head_sha=info.head_sha,
     )
 
 

@@ -649,3 +649,22 @@ class ProgressEvent(BaseModel):
     total: int = 0
     report_id: str | None = None
     error: str | None = None
+
+class PullRequestCommentRequest(BaseModel):
+    """Which pull request to comment on."""
+
+    pull_request_url: str = Field(
+        max_length=500,
+        description="https://github.com/owner/repo/pull/123",
+    )
+
+
+class PullRequestCommentResult(BaseModel):
+    comment_url: str = Field(description="The comment that was posted or edited.")
+    pull_request_url: str
+    head_sha: str = Field(
+        description=(
+            "The commit the comment describes. A branch name would move under "
+            "the comment and make it impossible to tell whether it is stale."
+        )
+    )

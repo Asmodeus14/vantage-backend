@@ -31,6 +31,12 @@ class Settings(BaseSettings):
     # persistently surprising failure mode for operators.
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
+    # Where a report lives, for links in text this service publishes elsewhere
+    # — currently the pull request comment. Derived here rather than taken from
+    # the request: the caller supplying it would mean a caller could have
+    # Vantage post a link to anywhere into someone's pull request.
+    app_base_url: str = "http://localhost:3000"
+
     # --- AI provider (optional; the service is fully functional without it) ---
     gemini_api_key: str | None = None
     # Free-tier quota is allocated per model, not per key — an exhausted model
