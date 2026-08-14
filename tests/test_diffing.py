@@ -312,3 +312,114 @@ async def test_a_store_failure_loses_the_comparison_not_the_report(ctx, store):
     runner = AnalysisRunner(Settings())
 
     assert await runner._delta(make_report("r2", [build(ctx, key="x")])) is None
+
+
+# --------------------------------------------------------------------------
+# Reopened: fixed once, and back
+# --------------------------------------------------------------------------
+
+def _finding(ctx: RuleContext, key: str) -> Finding:
+    """A finding whose fingerprint is stable across reports."""
+    return build(ctx, rule_id="security/sql-injection", file="api/users.js", key=key)
+
+
+def test_a_returning_finding_is_reopened_not_new(ctx):
+    """The distinction the whole feature exists for.
+
+    "You introduced this" and "the fix for this did not hold" call for
+    different reactions, and reporting both as `new` loses the more
+    interesting of the two.
+    """
+    problem = _finding(ctx, "leak-1")
+
+    oldest = make_report("r1", [problem], minutes_ago=30)   # present
+    previous = make_report("r2", [], minutes_ago=20)        # fixed
+    current = make_report("r3", [problem], minutes_ago=10)  # back
+
+    delta = compare(current, previous, [oldest])
+
+    assert delta.reopened == [problem.fingerprint]
+    assert delta.new == []
+    assert delta.unchanged == 0
+
+
+def test_new_and_reopened_are_disjoint(ctx):
+    returning = _finding(ctx, "old-problem")
+    fresh = build(ctx, rule_id="security/ssrf", file="api/proxy.js", key="brand-new")
+
+    oldest = make_report("r1", [returning], minutes_ago=30)
+    previous = make_report("r2", [], minutes_ago=20)
+    current = make_report("r3", [returning, fresh], minutes_ago=10)
+
+    delta = compare(current, previous, [oldest])
+
+    assert delta.reopened == [returning.fingerprint]
+    assert delta.new == [fresh.fingerprint]
+    assert not set(delta.new) & set(delta.reopened)
+
+
+def test_without_history_a_returning_finding_reads_as_new(ctx):
+    """`earlier` is optional, and its absence must not invent a regression.
+
+    Reports written before reopening was tracked carry no history, and "new" is
+    the honest answer when you cannot see far enough back to know otherwise.
+    """
+    problem = _finding(ctx, "leak-1")
+    previous = make_report("r2", [], minutes_ago=20)
+    current = make_report("r3", [problem], minutes_ago=10)
+
+    delta = compare(current, previous)
+
+    assert delta.new == [problem.fingerprint]
+    assert delta.reopened == []
+
+
+def test_a_finding_that_never_went_away_is_unchanged_not_reopened(ctx):
+    """Present throughout. The window must not turn continuity into a
+    regression."""
+    problem = _finding(ctx, "always-here")
+
+    oldest = make_report("r1", [problem], minutes_ago=30)
+    previous = make_report("r2", [problem], minutes_ago=20)
+    current = make_report("r3", [problem], minutes_ago=10)
+
+    delta = compare(current, previous, [oldest])
+
+    assert delta.unchanged == 1
+    assert delta.reopened == []
+    assert delta.new == []
+
+
+def test_reopening_is_detected_several_analyses_later(ctx):
+    """Fixed once, clean for a while, then regressed — the realistic shape."""
+    problem = _finding(ctx, "regression")
+
+    history = [
+        make_report("r5", [], minutes_ago=20),
+        make_report("r4", [], minutes_ago=30),
+        make_report("r3", [], minutes_ago=40),
+        make_report("r2", [problem], minutes_ago=50),
+        make_report("r1", [problem], minutes_ago=60),
+    ]
+    current = make_report("r6", [problem], minutes_ago=10)
+
+    delta = compare(current, history[0], history[1:])
+
+    assert delta.reopened == [problem.fingerprint]
+    assert delta.new == []
+
+
+def test_resolved_still_reported_alongside_reopened(ctx):
+    """The three states have to coexist without stealing from each other."""
+    returning = _finding(ctx, "returning")
+    going = build(ctx, rule_id="quality/long-file", file="big.ts", key="going")
+
+    oldest = make_report("r1", [returning], minutes_ago=30)
+    previous = make_report("r2", [going], minutes_ago=20)
+    current = make_report("r3", [returning], minutes_ago=10)
+
+    delta = compare(current, previous, [oldest])
+
+    assert delta.reopened == [returning.fingerprint]
+    assert [r.fingerprint for r in delta.resolved] == [going.fingerprint]
+    assert delta.new == []

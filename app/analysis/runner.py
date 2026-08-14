@@ -60,6 +60,16 @@ logger = logging.getLogger(__name__)
 
 JOB_RETENTION_SECONDS = 900
 
+# How far back reopening is detected.
+#
+# Ten analyses is enough to catch the realistic case — fixed, then regressed a
+# few pushes later — without turning one diff into a scan of a project's entire
+# history. The cost is transferring ten payloads instead of one, which is a
+# single round trip either way, and the round trip is what dominates. Past this
+# window a returning finding reads as new, which is a quieter kind of wrong
+# than claiming a regression nobody can verify.
+REOPEN_WINDOW = 10
+
 
 def new_id(prefix: str = "") -> str:
     return f"{prefix}{secrets.token_urlsafe(9)}"
@@ -363,13 +373,28 @@ class AnalysisRunner:
         if repository is None:
             return None
         try:
-            previous = await get_store().latest_for(repository, owner_id=owner_id)
+            # A window of history rather than just the previous report, so a
+            # problem that was fixed and has come back can be told apart from
+            # one that is genuinely new. This replaces the old `latest_for`
+            # call rather than adding to it: same number of round trips, and on
+            # this deployment a round trip is the expensive part.
+            history = await get_store().reports_for(
+                repository, owner_id=owner_id, limit=REOPEN_WINDOW
+            )
         except Exception:
             logger.exception("Could not load the previous report for %s", repository)
             return None
-        if previous is None or not is_comparable(report, previous):
+        if not history:
             return None
-        return compare(report, previous)
+
+        previous, earlier = history[0], history[1:]
+        if not is_comparable(report, previous):
+            return None
+        # `earlier` is not filtered by `is_comparable`. It is only ever asked
+        # "did this fingerprint appear here", and a fingerprint carries its own
+        # rule and location — so a truncated or otherwise unsuitable report can
+        # still answer that honestly, even though it could not anchor a diff.
+        return compare(report, previous, earlier)
 
     async def _activity(
         self,

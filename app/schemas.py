@@ -407,6 +407,18 @@ class FindingDelta(BaseModel):
         default_factory=list, description="Fingerprints of findings not seen before."
     )
     resolved: list[ResolvedFinding] = Field(default_factory=list)
+    reopened: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Fingerprints present now, absent from the previous analysis, and "
+            "present in one before that — a problem that was fixed and has "
+            "come back. Disjoint from `new`: a finding is one or the other, "
+            "never both, because 'you introduced this' and 'this regressed' "
+            "call for different reactions. Empty on reports written before "
+            "reopening was tracked, which reads as 'none known' rather than "
+            "'none happened'."
+        ),
+    )
     unchanged: int = 0
     new_rules: list[str] = Field(
         default_factory=list,
