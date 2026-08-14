@@ -8,6 +8,7 @@ lifetime. The in-memory mode is a real, working fallback — not a stub — and
 
 from __future__ import annotations
 
+import json
 import logging
 from collections import OrderedDict
 from datetime import datetime
@@ -132,6 +133,29 @@ class ReportStore(Protocol):
         endpoint handing every caller the index of everyone's analyses.
         """
         ...
+
+
+def _as_object(value: object) -> dict:
+    """Normalise a JSON-path result to a dict.
+
+    Extracting `payload['source']` in SQL does not return the same Python type
+    everywhere. Postgres `->` with asyncpg and SQLite `json_extract` disagree
+    about whether the driver has already decoded the value, and SQLAlchemy's
+    JSON type only re-decodes in some of those combinations.
+
+    Rather than pick a dialect and hope, both shapes are accepted. Anything
+    unrecognised becomes `{}`, which Pydantic then rejects or defaults —
+    a listing must not raise because one row's payload is odd.
+    """
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str | bytes | bytearray):
+        try:
+            decoded = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
 
 
 def _summarise(
@@ -345,10 +369,34 @@ class PostgresReportStore:
         if maker is None:  # pragma: no cover
             raise RuntimeError("Database is not configured")
 
-        query = select(ReportRow).order_by(ReportRow.created_at.desc())
+        # Columns, not entities.
+        #
+        # This said `select(ReportRow)` — the whole row, `payload` included —
+        # and three comments in this file said it did not: "without
+        # deserialising every payload", "listing never needs to deserialise
+        # this", "never touches `payload`". Every one of them described the
+        # intent rather than the code. A listing of twenty reports pulled
+        # twenty complete reports across the wire and JSON-decoded them, to
+        # read two small objects out of each.
+        #
+        # `source` and `severity_counts` are the only parts not already
+        # denormalised into columns, so they are extracted *in the database*
+        # via a JSON path. The database sends two small objects per row
+        # instead of an entire report.
+        query = select(
+            ReportRow.id,
+            ReportRow.created_at,
+            ReportRow.score,
+            ReportRow.grade,
+            ReportRow.total_findings,
+            ReportRow.duration_seconds,
+            ReportRow.effective_score,
+            ReportRow.suppressed_count,
+            ReportRow.payload["source"].label("source"),
+            ReportRow.payload["severity_counts"].label("severity_counts"),
+        ).order_by(ReportRow.created_at.desc())
         if repository is not None:
-            # Filters on the indexed column, so this stays a cheap query and
-            # never touches `payload`.
+            # Filters on the indexed column, so this stays a cheap query.
             query = query.where(ReportRow.repository == repository)
 
         # `IS NULL` for anonymous, never "any owner". Signed-out callers see
@@ -361,21 +409,19 @@ class PostgresReportStore:
         )
 
         async with maker() as session:
-            result = await session.execute(query.limit(limit))
-            rows = result.scalars().all()
+            rows = (await session.execute(query.limit(limit))).all()
 
         summaries: list[ReportSummary] = []
         for row in rows:
-            payload = row.payload
             summaries.append(
                 ReportSummary(
                     id=row.id,
                     created_at=row.created_at,
-                    source=SourceInfo.model_validate(payload["source"]),
+                    source=SourceInfo.model_validate(_as_object(row.source)),
                     score=row.score,
                     grade=row.grade,
                     severity_counts=SeverityCounts.model_validate(
-                        payload.get("severity_counts", {})
+                        _as_object(row.severity_counts)
                     ),
                     total_findings=row.total_findings,
                     duration_seconds=float(row.duration_seconds),
