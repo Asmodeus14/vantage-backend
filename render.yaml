@@ -11,7 +11,23 @@ services:
     # Migrations run first and always exit 0: a bad revision must leave the
     # previous schema serving rather than stop the service booting.
     # /api/health reports the schema state so it degrades visibly, not silently.
-    startCommand: python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 2
+    #
+    # ONE worker, and this is load-bearing rather than a tuning choice.
+    #
+    # `jobs = JobManager()` in app/analysis/runner.py is a module-level dict, so
+    # there is one of it per *process*. Starting an analysis and streaming its
+    # progress are two separate HTTP connections, and uvicorn's workers share a
+    # listening socket, so the OS hands the second one to whichever process is
+    # free — not to the one holding the job.
+    #
+    # With two workers that is a coin flip: about half of all analyses showed
+    # "That analysis is no longer available" from /api/analyze/{id}/events while
+    # the analysis was running perfectly well in the other process. The report
+    # still landed in the database; the user just never saw it happen.
+    #
+    # Raising this again requires moving job state out of process first.
+    # tests/test_deployment.py enforces that pairing so the two cannot drift.
+    startCommand: python -m app.migrate && uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1
     healthCheckPath: /api/health
     envVars:
       - key: ENVIRONMENT
