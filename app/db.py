@@ -109,8 +109,12 @@ async def create_tables() -> None:
         logger.debug("Postgres detected; schema is owned by Alembic.")
         return
 
-    # Import registers the models on Base.metadata.
-    from app import store  # noqa: F401
+    # Importing registers each model on Base.metadata. Every module that
+    # declares a table has to be listed: `create_all` only knows about mappers
+    # that already exist, so a module reached later — or not at all on this
+    # code path — silently produces a missing table rather than an error.
+    # Postgres is unaffected either way, since Alembic owns the schema there.
+    from app import jobs, store, suppressions  # noqa: F401
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)

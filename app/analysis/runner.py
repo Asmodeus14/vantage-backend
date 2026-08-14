@@ -41,6 +41,7 @@ from app.ingest.github import (
 from app.ingest.history import WINDOW_DAYS as HISTORY_WINDOW_DAYS
 from app.ingest.history import collect_activity
 from app.ingest.snapshot import Snapshot
+from app.jobs import record_failed, record_succeeded
 from app.schemas import (
     AnalysisStage,
     Finding,
@@ -311,6 +312,10 @@ class AnalysisRunner:
         await self._store_source(report, snapshot)
 
         job.report_id = report.id
+        # Recorded before the event is emitted. A client that reconnects in the
+        # gap between the two must find the outcome rather than a job that is
+        # still marked running.
+        await record_succeeded(job.id, report.id)
         await job.emit(
             ProgressEvent(
                 stage=AnalysisStage.DONE,
@@ -402,6 +407,7 @@ class AnalysisRunner:
             )
 
     async def _fail(self, job: Job, message: str, detail: str | None = None) -> None:
+        await record_failed(job.id, detail or message)
         await job.emit(
             ProgressEvent(
                 stage=AnalysisStage.FAILED,

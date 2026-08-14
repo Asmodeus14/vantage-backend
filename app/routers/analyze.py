@@ -26,6 +26,8 @@ from app.auth.tickets import redeem_upload_ticket
 from app.config import Settings, get_settings
 from app.errors import ArchiveTooLargeError, InvalidArchiveError
 from app.ingest.github import GitHubCredentials
+from app.jobs import get as get_job_record
+from app.jobs import record_started
 from app.limiter import limiter
 from app.schemas import AnalysisStage, AnalyzeRepositoryRequest, ProgressEvent
 
@@ -52,6 +54,9 @@ async def analyse_repository(
     credentials = _credentials_for(user, settings)
 
     job = jobs.create()
+    # Recorded before the task starts, so a client that reconnects during the
+    # first seconds finds a job that exists rather than one that does not yet.
+    await record_started(job.id, owner_id=user.id if user else None)
     runner = AnalysisRunner(settings)
     job.task = asyncio.create_task(
         runner.run_repository(
@@ -140,6 +145,7 @@ async def analyse_upload(
     owner_id = user.id if user else redeem_upload_ticket(ticket, settings)
 
     job = jobs.create()
+    await record_started(job.id, owner_id=owner_id)
     runner = AnalysisRunner(settings)
     job.task = asyncio.create_task(
         runner.run_upload(job, archive_path, filename, owner_id=owner_id)
@@ -156,15 +162,66 @@ async def stream_events(job_id: str) -> StreamingResponse:
     """Server-Sent Events carrying genuine per-stage progress."""
     job = jobs.get(job_id)
     if job is None:
-        async def missing():
-            payload = ProgressEvent(
-                stage=AnalysisStage.FAILED,
-                message="That analysis is no longer available.",
-                error="Unknown or expired job id.",
-            )
-            yield _frame(payload)
+        # Not in this process. That used to be the end of it, and the client
+        # was told the analysis no longer existed — which was often false: the
+        # work had finished and the report was sitting in the database with
+        # nobody holding its id.
+        #
+        # The event log is deliberately not persisted; replaying stages that
+        # finished twenty minutes ago helps nobody. What is persisted is the
+        # outcome, which is the only part a reconnecting client needs.
+        async def recovered():
+            record = await get_job_record(job_id)
 
-        return StreamingResponse(missing(), media_type="text/event-stream")
+            if record is None:
+                yield _frame(
+                    ProgressEvent(
+                        stage=AnalysisStage.FAILED,
+                        message="That analysis is no longer available.",
+                        error="Unknown or expired job id.",
+                    )
+                )
+                return
+
+            if record.status == "succeeded" and record.report_id:
+                yield _frame(
+                    ProgressEvent(
+                        stage=AnalysisStage.DONE,
+                        message="Analysis finished.",
+                        completed=1,
+                        total=1,
+                        report_id=record.report_id,
+                    )
+                )
+                return
+
+            if record.status == "failed":
+                yield _frame(
+                    ProgressEvent(
+                        stage=AnalysisStage.FAILED,
+                        message="That analysis failed.",
+                        error=record.error or "The analysis did not complete.",
+                    )
+                )
+                return
+
+            # Recorded as running, but no process is running it. The server
+            # restarted underneath it — free-tier instances sleep when idle.
+            # Saying so is more useful than a spinner that never resolves,
+            # because the action it implies is "run it again", and that is
+            # true.
+            yield _frame(
+                ProgressEvent(
+                    stage=AnalysisStage.FAILED,
+                    message="That analysis was interrupted before it finished.",
+                    error=(
+                        "The server restarted while it was running. Nothing was "
+                        "saved, so running it again is safe."
+                    ),
+                )
+            )
+
+        return StreamingResponse(recovered(), media_type="text/event-stream")
 
     async def generate():
         # Read the log by index so a client attaching mid-run replays the
