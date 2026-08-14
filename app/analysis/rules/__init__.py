@@ -10,4 +10,5 @@ from app.analysis.rules import (  # noqa: F401
     quality,
     react,
     secrets,
+    security,
 )
