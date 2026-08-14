@@ -143,6 +143,37 @@ def _is_documentation_value(value: str) -> bool:
     return bool(_DOCUMENTED_CREDENTIALS.search(stripped))
 
 
+# An API-documentation example. OpenAPI and Swagger-in-JSDoc both write a
+# sample response inline, and a sample JWT is a structurally perfect JWT:
+#
+#     example:
+#       token: eyJhbGciOiJIUzI1NiIs...
+#     *   example:
+#     *     refreshToken: eyJhbGciOiJIUzI1NiIs...
+#
+# `hagopj13/node-express-boilerplate` — an ordinary application, not a
+# deliberately vulnerable one — produced three findings and all three were
+# this. The placeholder word list is deliberately not applied to
+# provider-shaped matches, because it would discard a real key containing a
+# word like "test", but that reasoning is about the *value*. An `example:` key
+# on the line above is a statement about the value's purpose, and no real
+# credential is introduced that way.
+_DOCUMENTATION_CONTEXT = re.compile(
+    r"^\s*(?:[*#/]\s*)?(?:example|examples|sample|default)\s*:", re.IGNORECASE
+)
+
+
+def _is_documentation_context(lines: list[str], number: int) -> bool:
+    """Whether the match sits under an `example:`-style key.
+
+    Looks at the line itself and the two above it — enough for
+    ``example:`` / ``token: <value>`` and its JSDoc-commented twin, without
+    reaching far enough to catch an unrelated key further up the file.
+    """
+    start = max(0, number - 3)
+    return any(_DOCUMENTATION_CONTEXT.match(line) for line in lines[start:number])
+
+
 # A certificate or key living under a test-fixture path, which is a thing
 # projects commit on purpose to exercise TLS. Narrow by design: it needs *both*
 # a fixture-shaped path and a key-shaped artefact, so a real credential that
@@ -203,6 +234,10 @@ class HardcodedSecretRule:
                     # the general placeholder heuristic would discard real keys
                     # that happen to contain a word like "test".
                     if _is_documentation_value(value):
+                        continue
+                    # …or sits under an `example:` key. See
+                    # `_is_documentation_context`.
+                    if _is_documentation_context(lines, number):
                         continue
                     key = (source.path, number)
                     if key in seen:

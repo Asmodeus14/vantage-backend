@@ -410,3 +410,42 @@ async def test_a_real_leak_still_gets_unambiguous_advice(tmp_path: Path):
     findings = await _keys_in(tmp_path, "src/config/production.key")
     assert "Revoke and rotate this credential" in findings[0].remediation
     assert "nothing needs doing" not in findings[0].remediation
+
+
+async def test_a_jwt_in_an_api_example_is_documentation(tmp_path: Path):
+    """OpenAPI and Swagger-in-JSDoc write sample responses inline, and a sample
+    JWT is a structurally perfect JWT.
+
+    `hagopj13/node-express-boilerplate` — an ordinary application — produced
+    three findings and all three were this.
+    """
+    JWT = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiI1ZWJhYzUzNDk1NGI1NDEzOTgwNmMxMTIiLCJpYXQiOjE1ODkyOTg0ODR9."
+        "m1U63blB0MLej_WfB7yC2FTMnCziif9X8yzwDEfJXAg"
+    )
+    ctx = _secret_ctx(tmp_path, "")  # writes config.js, unused here
+    (tmp_path / "openapi.yml").write_text(
+        f"          example:\n            token: {JWT}\n", newline=""
+    )
+    (tmp_path / "route.js").write_text(
+        f" *             example:\n *               refreshToken: {JWT}\n", newline=""
+    )
+    ctx = RuleContext(
+        snapshot=Snapshot.build(tmp_path),
+        facts=ProjectFacts(languages={"javascript"}, package_json={"name": "x"}),
+        settings=Settings(),
+    )
+    assert await HardcodedSecretRule().run(ctx) == []
+
+
+async def test_a_jwt_that_is_not_an_example_is_still_reported(tmp_path: Path):
+    """The exemption is about the `example:` key, not about JWTs."""
+    JWT = (
+        "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9."
+        "eyJzdWIiOiI1ZWJhYzUzNDk1NGI1NDEzOTgwNmMxMTIiLCJpYXQiOjE1ODkyOTg0ODR9."
+        "m1U63blB0MLej_WfB7yC2FTMnCziif9X8yzwDEfJXAg"
+    )
+    ctx = _secret_ctx(tmp_path, f'const SESSION = "{JWT}";\n')
+    findings = await HardcodedSecretRule().run(ctx)
+    assert len(findings) == 1

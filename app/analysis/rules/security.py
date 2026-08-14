@@ -79,15 +79,19 @@ def sources(ctx: RuleContext, *languages: str) -> list[SourceFile]:
 #
 # Express/Koa/Next, Flask/Django/FastAPI, and the two runtime sources that are
 # input in the same sense.
+# Every accessor ends at a word boundary. Without one, `url` matched the `url`
+# inside `urllib.request.urlopen`, so `flask_security`'s HaveIBeenPwned lookup —
+# a constant URL with a hash appended — was reported as an SSRF. Found by
+# scanning a corpus of real applications, not by a test.
 REQUEST_SOURCE = re.compile(
     r"""\b(?:
-        req(?:uest)?\s*\.\s*(?:query|body|params|headers|cookies|url|path)
-      | ctx\s*\.\s*(?:query|request|params)
-      | request\s*\.\s*(?:args|form|json|values|data|files|GET|POST|headers|COOKIES)
-      | event\s*\.\s*(?:queryStringParameters|pathParameters|body)
-      | searchParams\s*\.\s*get
-      | process\s*\.\s*argv
-      | (?:sys\s*\.\s*)?argv
+        req(?:uest)?\s*\.\s*(?:query|body|params|headers|cookies|url|path)\b
+      | ctx\s*\.\s*(?:query|request|params)\b
+      | request\s*\.\s*(?:args|form|json|values|data|files|GET|POST|headers|COOKIES)\b
+      | event\s*\.\s*(?:queryStringParameters|pathParameters|body)\b
+      | searchParams\s*\.\s*get\b
+      | process\s*\.\s*argv\b
+      | (?:sys\s*\.\s*)?argv\b
       | input\s*\(
     )""",
     re.IGNORECASE | re.VERBOSE,
@@ -788,12 +792,24 @@ class PermissiveCorsRule:
         return findings
 
 
+# Unambiguous on their own: these name JWT decoding or the option that turns
+# its verification off.
 _JWT_UNVERIFIED = re.compile(
     r"jwt\s*\.\s*decode\s*\(|jsonwebtoken\s*\.\s*decode\s*\(|"
-    r"verify_signature[\"']?\s*:\s*False|verify\s*=\s*False|"
+    r"verify_signature[\"']?\s*:\s*False|"
     r"algorithms?\s*:\s*\[?\s*[\"']none[\"']",
     re.IGNORECASE,
 )
+
+# `verify=False` was in the pattern above and should never have been. It is a
+# keyword argument shared by half of Python: `EmailValidation(verify=False)` in
+# `flask_security` was reported as an unverified JWT, and so would
+# `requests.get(url, verify=False)` — which is a real problem, but a *different*
+# one, and calling it a JWT flaw is how a rule teaches people to distrust it.
+#
+# Kept, but only where JWT is actually in view.
+_VERIFY_DISABLED = re.compile(r"verify\s*=\s*False", re.IGNORECASE)
+_JWT_CONTEXT = re.compile(r"\bjwt\b|json\s*web\s*token|jsonwebtoken", re.IGNORECASE)
 # `jwt.decode(token, key, algorithms=[...])` in PyJWT *is* verification.
 _JWT_VERIFIED = re.compile(r"algorithms\s*=\s*\[|\bjwt\s*\.\s*verify\s*\(")
 
@@ -815,9 +831,17 @@ class JwtUnverifiedRule:
             # Raw lines: `algorithms: ['none']` and the `verify_signature`
             # option key are both string literals.
             for number, line in iter_literal_lines(source):
-                if not _JWT_UNVERIFIED.search(line):
-                    continue
                 window = _context(source, number)
+
+                if _JWT_UNVERIFIED.search(line):
+                    pass
+                elif _VERIFY_DISABLED.search(line) and _JWT_CONTEXT.search(window):
+                    # `verify=False` only counts when JWT is in view — see the
+                    # note on `_VERIFY_DISABLED`.
+                    pass
+                else:
+                    continue
+
                 if _JWT_VERIFIED.search(window) and "False" not in window:
                     continue
 

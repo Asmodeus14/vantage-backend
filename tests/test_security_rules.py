@@ -526,3 +526,50 @@ async def test_every_finding_carries_remediation_and_a_reference(tmp_path):
         assert finding.references
         assert finding.fingerprint
         assert finding.description != finding.title
+
+
+# --------------------------------------------------------------------------
+# False positives found by scanning a corpus of real applications
+# --------------------------------------------------------------------------
+
+def test_urlopen_is_not_a_request_source():
+    """`urllib.request.urlopen` contains the substring `request.url`.
+
+    Without a trailing word boundary the taint check matched it, and
+    `flask_security`'s HaveIBeenPwned lookup — a constant URL with a hash
+    appended — was reported as an SSRF. Found by scanning real applications,
+    not by a test.
+    """
+    assert tainted("with urllib.request.urlopen(req) as f:") is False
+    assert tainted("req = urllib.request.Request(URL + sha1[:5])") is False
+    # Still catches the accessor it was written for.
+    assert tainted("const target = req.url") is True
+    assert tainted("fetch(request.url)") is True
+
+
+async def test_verify_false_outside_jwt_is_not_a_jwt_finding(tmp_path):
+    """`verify=False` is a keyword argument shared by half of Python.
+
+    `EmailValidation(verify=False)` in `flask_security` was reported as an
+    unverified JWT. `requests.get(url, verify=False)` would have been too —
+    that one is a real problem, but a different one, and mislabelling it is how
+    a rule teaches people to distrust it.
+    """
+    findings = await run(
+        JwtUnverifiedRule(),
+        tmp_path,
+        {
+            "forms.py": "EmailValidation(verify=False)\n",
+            "client.py": "resp = requests.get(url, verify=False)\n",
+        },
+    )
+    assert findings == []
+
+
+async def test_verify_false_with_jwt_in_view_is_still_caught(tmp_path):
+    findings = await run(
+        JwtUnverifiedRule(),
+        tmp_path,
+        {"auth.py": "import jwt\nclaims = jwt.decode(token, verify=False)\n"},
+    )
+    assert len(findings) == 1
