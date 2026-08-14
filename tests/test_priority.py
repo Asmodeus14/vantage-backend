@@ -318,3 +318,70 @@ def test_a_dependency_cve_does_not_cap():
 
 def test_a_clean_project_is_unaffected_by_the_cap():
     assert compute_score([], analysed_files=200).value == 100
+
+
+# --------------------------------------------------------------------------
+# Test certificates are not an incident
+# --------------------------------------------------------------------------
+
+KEY = (
+    "-----BEGIN PRIVATE KEY-----\n"
+    "MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7VJTUt9Us8cKj\n"
+    "-----END PRIVATE KEY-----\n"
+)
+
+
+async def _keys_in(tmp_path: Path, path: str):
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(KEY, newline="")
+    ctx = RuleContext(
+        snapshot=Snapshot.build(tmp_path),
+        facts=ProjectFacts(languages={"python"}),
+        settings=Settings(),
+    )
+    return await HardcodedSecretRule().run(ctx)
+
+
+async def test_a_tls_test_fixture_is_reported_but_not_as_an_incident(tmp_path: Path):
+    """Measured on `psf/requests`: four private keys under `tests/certs/` —
+    expired CA, server, client — scored the project an F, because a
+    HIGH-confidence critical caps the grade. Committing throwaway certificates
+    to exercise TLS is what every HTTP library does.
+
+    Still reported. Only the confidence drops, which keeps it out of the
+    default view and out of the score cap.
+    """
+    findings = await _keys_in(tmp_path, "tests/certs/expired/ca/ca-private.key")
+    assert len(findings) == 1
+    assert findings[0].severity is Severity.CRITICAL
+    assert findings[0].confidence is Confidence.MEDIUM
+
+    # And therefore does not drag the grade to F.
+    assert compute_score(findings, analysed_files=200).value > 39
+
+
+async def test_a_private_key_in_the_source_tree_is_still_an_incident(tmp_path: Path):
+    findings = await _keys_in(tmp_path, "src/config/production.key")
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert compute_score(findings, analysed_files=200).value <= 39
+
+
+async def test_a_real_credential_inside_a_test_file_is_not_downgraded(tmp_path: Path):
+    """The exemption is for test *certificates*, not for test directories.
+
+    An AWS key committed in a test is a leaked AWS key, and the narrowness here
+    is what stops this becoming "secrets are ignored under tests/".
+    """
+    target = tmp_path / "tests" / "test_client.py"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text('KEY = "AKIA3F7XQ2LMWDZP9TVB"\n', newline="")
+    ctx = RuleContext(
+        snapshot=Snapshot.build(tmp_path),
+        facts=ProjectFacts(languages={"python"}),
+        settings=Settings(),
+    )
+    findings = await HardcodedSecretRule().run(ctx)
+    assert findings
+    assert all(f.confidence is Confidence.HIGH for f in findings)

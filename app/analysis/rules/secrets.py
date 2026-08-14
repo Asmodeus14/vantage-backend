@@ -143,6 +143,24 @@ def _is_documentation_value(value: str) -> bool:
     return bool(_DOCUMENTED_CREDENTIALS.search(stripped))
 
 
+# A certificate or key living under a test-fixture path, which is a thing
+# projects commit on purpose to exercise TLS. Narrow by design: it needs *both*
+# a fixture-shaped path and a key-shaped artefact, so a real credential that
+# merely happens to sit in a tests directory is untouched.
+_FIXTURE_PATH = re.compile(
+    r"(^|/)(tests?|testing|__tests__|spec|fixtures?|testdata|certs?|"
+    r"test[-_]?certs?)(/|$)",
+    re.IGNORECASE,
+)
+_KEY_ARTEFACT = re.compile(r"\.(key|pem|crt|cer|p12|pfx)$", re.IGNORECASE)
+
+
+def _is_test_fixture_key(path: str, label: str) -> bool:
+    if "private key" not in label.lower():
+        return False
+    return bool(_FIXTURE_PATH.search(path) and _KEY_ARTEFACT.search(path))
+
+
 @register
 class HardcodedSecretRule:
     id = "security/hardcoded-secret"
@@ -190,9 +208,29 @@ class HardcodedSecretRule:
                     if key in seen:
                         continue
                     seen.add(key)
+                    # A TLS key under a test-fixture path is a test certificate.
+                    #
+                    # Measured on `psf/requests`: four private keys in
+                    # `tests/certs/` — expired CA, server, client — scored the
+                    # project an F, because a HIGH-confidence critical caps the
+                    # grade. Committing throwaway certificates to exercise TLS
+                    # is what every HTTP library does, so that reading is wrong
+                    # in the way that matters: it is confident, severe, and
+                    # about a file the maintainers put there deliberately.
+                    #
+                    # Still reported, and still critical if it turns out to be
+                    # real — only the confidence drops, which keeps it out of
+                    # the default view and out of the score cap. A credential
+                    # that is genuinely leaked in a test directory is a real
+                    # leak, so dropping it entirely would be the worse error.
+                    confidence = (
+                        Confidence.MEDIUM
+                        if _is_test_fixture_key(source.path, label)
+                        else Confidence.HIGH
+                    )
                     findings.append(
                         self._finding(ctx, source.path, number, label, value, severity,
-                                      Confidence.HIGH)
+                                      confidence)
                     )
                     matched = True
                     break
