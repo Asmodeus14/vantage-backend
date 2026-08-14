@@ -4,3 +4,7 @@
 -r requirements.txt
 
 ruff>=0.16
+
+# Validates exported SARIF against the OASIS 2.1.0 schema in tests. The
+# schema is vendored at tests/fixtures/ so the suite stays offline.
+jsonschema>=4

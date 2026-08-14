@@ -24,12 +24,16 @@ accepted findings, so a shared link means one thing to everyone, while
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response
 
 from app.analysis.scoring import compute_score
 from app.auth.dependencies import NotAuthorised, current_user
 from app.auth.store import AuthenticatedUser
 from app.errors import ReportNotFoundError
+from app.export.sarif import to_sarif
 from app.schemas import (
     Finding,
     Report,
@@ -163,6 +167,38 @@ async def get_report(
         and report.source.repository is not None
     )
     return report
+
+
+@router.get("/{report_id}/sarif")
+async def get_report_sarif(report_id: str) -> Response:
+    """The same report as SARIF 2.1.0.
+
+    Exposure matches `get_report` exactly and deliberately: anyone holding the
+    id may read it, because that is what makes a report link shareable and the
+    id is unguessable. Adding an ownership check *here* would not protect
+    anything — the same content is already served as JSON one route up — it
+    would only make the export inconsistent with the page it exports.
+
+    Suppressions are applied first, so an accepted finding is exported marked
+    as suppressed rather than exported as though nobody had looked at it.
+
+    Served as a download: the point of this endpoint is a file that goes into
+    another tool, and `Content-Disposition` is the difference between that and
+    a wall of JSON in a browser tab.
+    """
+    store = get_store()
+    report = await store.get(report_id)
+    report = await _apply_suppressions(report, await store.owner_of(report_id))
+
+    return Response(
+        content=json.dumps(to_sarif(report), indent=2),
+        media_type="application/sarif+json",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{report_id}.vantage.sarif"'
+            )
+        },
+    )
 
 
 @router.get("/{report_id}/suppressions", response_model=list[Suppression])
