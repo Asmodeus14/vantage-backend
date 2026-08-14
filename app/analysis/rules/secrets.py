@@ -147,7 +147,7 @@ def _is_documentation_value(value: str) -> bool:
 class HardcodedSecretRule:
     id = "security/hardcoded-secret"
     name = "Hardcoded secret"
-    category = Category.SECURITY
+    category = Category.SECRET
 
     def applies(self, ctx: RuleContext) -> bool:
         return True
@@ -264,7 +264,7 @@ class HardcodedSecretRule:
                 f"Detected value: {redact(value)}. Anything committed to git "
                 f"remains recoverable from history even after being deleted."
             ),
-            category=Category.SECURITY,
+            category=Category.SECRET,
             severity=severity,
             confidence=confidence,
             file=path,
@@ -282,7 +282,7 @@ class HardcodedSecretRule:
 class EnvNotIgnoredRule:
     id = "security/env-not-ignored"
     name = ".env is not gitignored"
-    category = Category.SECURITY
+    category = Category.SECRET
 
     def applies(self, ctx: RuleContext) -> bool:
         return True
@@ -324,7 +324,7 @@ class EnvNotIgnoredRule:
                         f".gitignore rule appears to exclude it. Environment "
                         f"files routinely hold credentials."
                     ),
-                    category=Category.SECURITY,
+                    category=Category.SECRET,
                     severity=Severity.HIGH,
                     confidence=Confidence.MEDIUM,
                     file=env_file.path,

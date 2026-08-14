@@ -56,6 +56,9 @@ class CategoryPolicy:
 # Security and dependency issues are judged on absolute count. Quality and
 # testing scale with the codebase, so they are normalised by size.
 POLICIES: dict[Category, CategoryPolicy] = {
+    # A committed credential is an incident rather than a weakness, and is the
+    # one finding class where a single instance should visibly move the score.
+    Category.SECRET: CategoryPolicy(weight=3.0, sensitivity=0.60, size_normalised=False),
     Category.SECURITY: CategoryPolicy(weight=3.0, sensitivity=0.30, size_normalised=False),
     Category.DEPENDENCIES: CategoryPolicy(weight=2.0, sensitivity=0.18, size_normalised=False),
     Category.CORRECTNESS: CategoryPolicy(weight=2.0, sensitivity=0.12, size_normalised=True),
@@ -63,6 +66,12 @@ POLICIES: dict[Category, CategoryPolicy] = {
     Category.CONFIGURATION: CategoryPolicy(weight=1.0, sensitivity=0.30, size_normalised=False),
     Category.PERFORMANCE: CategoryPolicy(weight=1.0, sensitivity=0.15, size_normalised=True),
     Category.QUALITY: CategoryPolicy(weight=1.0, sensitivity=0.10, size_normalised=True),
+    # Weight 0: metrics are measurements, not defects. A 1,200-line file is a
+    # fact about the codebase, not a thing that is wrong with it, and grading
+    # on it means a large project can never score well no matter how carefully
+    # it is written. They are still computed and still shown — `weight=0` keeps
+    # them out of the average without hiding them.
+    Category.METRIC: CategoryPolicy(weight=0.0, sensitivity=0.10, size_normalised=True),
 }
 
 DEFAULT_POLICY = CategoryPolicy(weight=1.0, sensitivity=0.15, size_normalised=True)
@@ -149,8 +158,15 @@ def _summarise(value: int, categories: list[CategoryScore], counts: SeverityCoun
 
 def compute_score(findings: list[Finding], analysed_files: int) -> Score:
     present = [c for c in Category if any(f.category == c for f in findings)]
-    # Include categories with no findings so the UI can show a full picture.
-    categories = [category_score(findings, c, analysed_files) for c in Category]
+    # Include categories with no findings so the UI can show a full picture,
+    # but not ones that carry no weight: a breakdown row saying "Metric 45/100"
+    # next to a score it contributed nothing to is a number that invites a
+    # conclusion it cannot support.
+    categories = [
+        category_score(findings, c, analysed_files)
+        for c in Category
+        if POLICIES.get(c, DEFAULT_POLICY).weight > 0
+    ]
 
     total_weight = sum(POLICIES.get(c.category, DEFAULT_POLICY).weight for c in categories)
     weighted = sum(

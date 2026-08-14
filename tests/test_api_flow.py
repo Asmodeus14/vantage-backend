@@ -121,9 +121,18 @@ def test_critical_security_outweighs_many_style_issues():
     assert security < style
 
 
-def test_score_breakdown_covers_every_category():
+def test_score_breakdown_covers_every_scored_category():
+    """Every category that carries weight appears, even with no findings, so
+    the UI can show a full picture rather than a ragged one.
+
+    `METRIC` is deliberately absent: it is weighted zero, and a breakdown row
+    showing it a score next to a total it contributed nothing to would invite
+    a conclusion the number cannot support. Updated from "every category" when
+    metrics were split out of quality.
+    """
     score = compute_score([make_finding(category=Category.SECURITY)], 10)
-    assert {c.category for c in score.categories} == set(Category)
+    scored = {c for c in Category if c is not Category.METRIC}
+    assert {c.category for c in score.categories} == scored
 
 
 def test_severity_counts_are_accurate():

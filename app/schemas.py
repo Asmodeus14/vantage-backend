@@ -25,13 +25,35 @@ class Severity(str, Enum):
 
 
 class Category(str, Enum):
+    """What kind of thing a finding is.
+
+    `SECRET` and `METRIC` are split out of `SECURITY` and `QUALITY` because
+    both were doing two jobs. A committed credential is not the same kind of
+    problem as a permissive CORS header — it is already an incident rather
+    than a weakness — and it earns its own line in the breakdown instead of
+    being averaged in with configuration advice.
+
+    `METRIC` is the more consequential split. "This file is 1,050 lines long"
+    is a measurement, not a defect: there is no fix, only a judgement. Mixed
+    into the findings list it buries real work under volume, which is the
+    complaint the audit actually raised. Metrics still run and are still
+    shown; they are weighted zero in the score. They inform, they do not
+    grade.
+
+    Values are the wire format and are never renamed — a stored report from
+    before this split still validates, and its findings keep the category they
+    were written with.
+    """
+
     SECURITY = "security"
+    SECRET = "secret"
     DEPENDENCIES = "dependencies"
     CORRECTNESS = "correctness"
     QUALITY = "quality"
     PERFORMANCE = "performance"
     TESTING = "testing"
     CONFIGURATION = "configuration"
+    METRIC = "metric"
 
 
 class Confidence(str, Enum):
@@ -92,6 +114,19 @@ class Finding(BaseModel):
 
     remediation: str | None = Field(default=None, description="What to do about it.")
     references: list[str] = Field(default_factory=list, description="URLs / CVE ids.")
+
+    priority: int = Field(
+        default=0,
+        ge=0,
+        le=100,
+        description=(
+            "What to fix first: severity x confidence x how actionable the "
+            "category is. Computed once on the server so every consumer ranks "
+            "findings the same way. Defaults to 0 on reports written before "
+            "prioritisation existed, which sorts them last rather than "
+            "pretending to know."
+        ),
+    )
 
     suppressed: bool = Field(
         default=False,

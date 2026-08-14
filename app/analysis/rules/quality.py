@@ -72,7 +72,7 @@ def _logic_lines(body: list[str]) -> int:
 class LongFileRule:
     id = "quality/long-file"
     name = "Very long file"
-    category = Category.QUALITY
+    category = Category.METRIC
 
     def applies(self, ctx: RuleContext) -> bool:
         return True
@@ -101,7 +101,7 @@ class LongFileRule:
                         f"them harder to test in isolation and a frequent "
                         f"source of merge conflicts."
                     ),
-                    category=Category.QUALITY,
+                    category=Category.METRIC,
                     severity=severity,
                     confidence=Confidence.HIGH,
                     file=source.path,
@@ -219,7 +219,7 @@ def _function_end(lines: list[str], start: int, language: str | None) -> int:
 class DeepNestingRule:
     id = "quality/deep-nesting"
     name = "Deeply nested control flow"
-    category = Category.QUALITY
+    category = Category.METRIC
 
     def applies(self, ctx: RuleContext) -> bool:
         return True
@@ -270,7 +270,7 @@ class DeepNestingRule:
                             "conditions in mind at once and is strongly "
                             "correlated with defect density."
                         ),
-                        category=Category.QUALITY,
+                        category=Category.METRIC,
                         severity=Severity.LOW,
                         confidence=Confidence.MEDIUM,
                         file=source.path,
@@ -288,7 +288,7 @@ class DeepNestingRule:
 class TodoDensityRule:
     id = "quality/todo-markers"
     name = "Unresolved TODO markers"
-    category = Category.QUALITY
+    category = Category.METRIC
 
     def applies(self, ctx: RuleContext) -> bool:
         return True
@@ -317,7 +317,7 @@ class TodoDensityRule:
                     f"markers across {len({h[0] for h in hits})} files. Markers "
                     f"that accumulate stop being read."
                 ),
-                category=Category.QUALITY,
+                category=Category.METRIC,
                 severity=Severity.INFO,
                 confidence=Confidence.HIGH,
                 file=path,

@@ -23,6 +23,7 @@ from pathlib import Path
 
 from app.analysis.diffing import compare, is_comparable
 from app.analysis.engine import AnalysisEngine, compute_score, severity_counts
+from app.analysis.priority import prioritise
 from app.config import Settings
 from app.errors import VantageError
 from app.ingest.archive import (
@@ -263,8 +264,18 @@ class AnalysisRunner:
             ProgressEvent(stage=AnalysisStage.SCORING, message="Scoring results")
         )
 
+        # Order before truncating. The cap used to fall wherever the rules
+        # happened to finish, so a repository over the limit could lose a
+        # critical secret and keep thirty long-file measurements — the cap
+        # decided what mattered, arbitrarily. Sorted worst-first, the cap now
+        # drops the least important findings by construction.
+        findings = prioritise(findings)
+
         truncated = len(findings) > self.settings.max_findings
         findings = findings[: self.settings.max_findings]
+
+        # Scored after truncation, as before: the score describes the findings
+        # the report actually contains.
         score = compute_score(findings, project.analysed_files)
 
         activity = await self._activity(job, repository, findings, credentials)
