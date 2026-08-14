@@ -24,7 +24,7 @@ from fastapi import APIRouter, Depends
 from app import __version__
 from app.ai.provider import LLMProvider, provider_dependency
 from app.config import Settings, get_settings
-from app.db import probe_database
+from app.db import probe_database, schema_state
 from app.schemas import (
     AIHealth,
     AuthStatus,
@@ -37,6 +37,13 @@ router = APIRouter(tags=["health"])
 
 _DB_PROBE_TTL_SECONDS = 15.0
 _db_cache: tuple[float, bool, str | None] | None = None
+
+# Cached far longer than the liveness probe: the schema changes on deploy and
+# at no other time, and reading it costs a query plus an Alembic script-
+# directory walk. A stale answer here is only ever stale until the next sweep,
+# and the process restarts on deploy anyway.
+_SCHEMA_TTL_SECONDS = 300.0
+_schema_cache: tuple[float, str] | None = None
 
 
 async def _database_health(settings: Settings) -> DependencyHealth:
@@ -53,11 +60,37 @@ async def _database_health(settings: Settings) -> DependencyHealth:
     now = time.monotonic()
     if _db_cache is not None and (now - _db_cache[0]) < _DB_PROBE_TTL_SECONDS:
         _, ok, detail = _db_cache
-        return DependencyHealth(configured=True, available=ok, detail=detail)
+        return DependencyHealth(
+            configured=True, available=ok, detail=detail, schema_state=await _schema()
+        )
 
     ok, detail = await probe_database()
     _db_cache = (now, ok, detail)
-    return DependencyHealth(configured=True, available=ok, detail=detail)
+    return DependencyHealth(
+        configured=True, available=ok, detail=detail, schema_state=await _schema()
+    )
+
+
+async def _schema() -> str:
+    """The migration state, cached.
+
+    `db.schema_state()` has always existed and its docstring has always said it
+    was "surfaced by /api/health so a migration that failed on deploy is
+    visible rather than showing up later as a confusing column error". Nothing
+    called it. The deploy intentionally lets a failed migration through so the
+    previous schema keeps serving, and that trade only works if the resulting
+    state is reported — otherwise the failure is silent until it surfaces as an
+    unrelated-looking column error days later.
+    """
+    global _schema_cache
+
+    now = time.monotonic()
+    if _schema_cache is not None and (now - _schema_cache[0]) < _SCHEMA_TTL_SECONDS:
+        return _schema_cache[1]
+
+    state = await schema_state()
+    _schema_cache = (now, state)
+    return state
 
 
 @router.get("/api/ping", response_model=PingResponse)

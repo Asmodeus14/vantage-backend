@@ -37,6 +37,7 @@ def in_memory(monkeypatch):
 
     monkeypatch.setattr(health_module, "probe_database", fake_probe)
     health_module._db_cache = None
+    health_module._schema_cache = None
 
     store = InMemoryReportStore()
     monkeypatch.setattr("app.store._store", store)
@@ -45,6 +46,7 @@ def in_memory(monkeypatch):
 
     app.dependency_overrides.clear()
     health_module._db_cache = None
+    health_module._schema_cache = None
     reset_store()
 
 

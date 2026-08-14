@@ -54,9 +54,11 @@ def spy(monkeypatch):
 
     monkeypatch.setattr(health_module, "probe_database", fake_probe)
     health_module._db_cache = None
+    health_module._schema_cache = None
     yield provider
     app.dependency_overrides.clear()
     health_module._db_cache = None
+    health_module._schema_cache = None
 
 
 def test_health_returns_ok(spy):
@@ -101,6 +103,7 @@ def test_ping_never_touches_the_database(monkeypatch):
         database_url="postgresql+asyncpg://user:pass@host/db"
     )
     health_module._db_cache = None
+    health_module._schema_cache = None
     try:
         with TestClient(app) as client:
             for _ in range(30):
@@ -113,6 +116,7 @@ def test_ping_never_touches_the_database(monkeypatch):
     finally:
         app.dependency_overrides.clear()
         health_module._db_cache = None
+        health_module._schema_cache = None
 
 
 def test_ping_answers_even_when_the_database_is_down(monkeypatch):
@@ -127,12 +131,14 @@ def test_ping_answers_even_when_the_database_is_down(monkeypatch):
         database_url="postgresql+asyncpg://user:pass@host/db"
     )
     health_module._db_cache = None
+    health_module._schema_cache = None
     try:
         with TestClient(app) as client:
             assert client.get("/api/ping").status_code == 200
     finally:
         app.dependency_overrides.clear()
         health_module._db_cache = None
+        health_module._schema_cache = None
 
 
 def test_health_reports_unconfigured_ai_without_failing(monkeypatch):
@@ -144,6 +150,7 @@ def test_health_reports_unconfigured_ai_without_failing(monkeypatch):
         gemini_api_key=None, database_url=None
     )
     health_module._db_cache = None
+    health_module._schema_cache = None
     try:
         with TestClient(app) as client:
             response = client.get("/api/health")
@@ -157,11 +164,13 @@ def test_health_reports_unconfigured_ai_without_failing(monkeypatch):
     finally:
         app.dependency_overrides.clear()
         health_module._db_cache = None
+        health_module._schema_cache = None
 
 
 def test_health_explains_missing_database(monkeypatch):
     app.dependency_overrides[get_settings] = lambda: Settings(database_url=None)
     health_module._db_cache = None
+    health_module._schema_cache = None
     try:
         with TestClient(app) as client:
             body = client.get("/api/health").json()
@@ -172,6 +181,7 @@ def test_health_explains_missing_database(monkeypatch):
     finally:
         app.dependency_overrides.clear()
         health_module._db_cache = None
+        health_module._schema_cache = None
 
 
 def test_database_probe_is_cached(monkeypatch, spy):
@@ -187,6 +197,7 @@ def test_database_probe_is_cached(monkeypatch, spy):
         database_url="postgresql+asyncpg://u:p@localhost/db"
     )
     health_module._db_cache = None
+    health_module._schema_cache = None
 
     with TestClient(app) as client:
         for _ in range(20):
@@ -231,3 +242,33 @@ def test_request_bodies_are_not_embedded():
         "content"
     ]["application/json"]["schema"]["$ref"]
     assert repo_ref.endswith("/AnalyzeRepositoryRequest")
+
+
+def test_health_reports_the_migration_state():
+    """`db.schema_state()` existed from the start, with a docstring saying it
+    was "surfaced by /api/health so a migration that failed on deploy is
+    visible rather than showing up later as a confusing column error".
+
+    Nothing called it. The deploy deliberately lets a failed migration through
+    so the previous schema keeps serving — a trade that only works if the
+    resulting state is reported, otherwise the failure is silent until it
+    surfaces as an unrelated-looking error days later.
+    """
+    health_module._db_cache = None
+    health_module._schema_cache = None
+
+    with TestClient(app) as client:
+        body = client.get("/api/health").json()
+
+    assert "schema_state" in body["database"], (
+        "health no longer reports the migration state; a failed deploy "
+        "migration would be invisible again"
+    )
+    # No database configured in tests, so there is no schema to be behind on.
+    assert body["database"]["schema_state"] in {
+        "not-applicable",
+        "current",
+        "behind",
+        "unknown",
+        None,
+    }

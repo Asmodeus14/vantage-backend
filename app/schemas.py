@@ -580,6 +580,16 @@ class DependencyHealth(BaseModel):
     configured: bool
     available: bool
     detail: str | None = None
+    schema_state: str | None = Field(
+        default=None,
+        description=(
+            "`current`, `behind`, `unknown`, or `not-applicable`. Deploys run "
+            "migrations with a deliberate `|| true` so a bad revision leaves "
+            "the previous schema serving rather than stopping the service from "
+            "booting — which only degrades *visibly* if the state is reported "
+            "somewhere. Null for dependencies that have no schema."
+        ),
+    )
 
 
 class AIHealth(BaseModel):
