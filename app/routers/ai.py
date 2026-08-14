@@ -51,6 +51,24 @@ class InvalidActionTarget(VantageError):
     code = "finding_not_found"
 
 
+class NoSourceForAction(VantageError):
+    """Asked to write code for a finding that has none attached."""
+
+    status_code = 422
+    code = "no_source_for_action"
+
+
+# Explain is deliberately absent: a dependency CVE can be explained from its
+# description alone, and that is a genuinely useful answer. These two cannot —
+# a diff and a test both have to be *of* something.
+_NEEDS_SOURCE = frozenset({AIAction.PROPOSE_FIX, AIAction.GENERATE_TEST})
+
+_VERB = {
+    AIAction.PROPOSE_FIX: "propose a fix against",
+    AIAction.GENERATE_TEST: "generate a test for",
+}
+
+
 def _cache_get(key: tuple[str, str]) -> AIActionResponse | None:
     response = _cache.get(key)
     if response is not None:
@@ -217,6 +235,21 @@ async def run_ai_action(
         report, finding, settings, _credentials_for(user, settings)
     )
     action = AIAction(body.action)
+    if action in _NEEDS_SOURCE and wider is None and not finding.snippet:
+        # Nothing to work from: _context_for would substitute a placeholder and
+        # the model would spend a real request telling us so. Dependency and
+        # project-wide findings are not anchored to a line, and a repository
+        # that can no longer be read degrades to the same place.
+        raise NoSourceForAction(
+            f"There is no source attached to this finding to {_VERB[action]}.",
+            detail=(
+                "This finding is not anchored to a file, so there is no code to "
+                "work from. Try Explain, which does not need the source."
+                if not finding.file
+                else f"{finding.file} could not be read from the repository, and "
+                "no snippet was captured when the report was generated."
+            ),
+        )
     built = build_prompt(action, _context_for(finding, repository, wider))
 
     raw = await provider.complete(built.user, system=built.system)

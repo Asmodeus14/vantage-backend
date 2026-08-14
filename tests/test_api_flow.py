@@ -519,3 +519,118 @@ def test_summary_ignores_an_accepted_finding():
     )
     accepted.suppressed = True
     assert "Start with" not in compute_score([accepted], 120).summary
+
+
+# --------------------------------------------------------------------------
+# AI actions that need source
+#
+# All three buttons used to be offered on every finding. A dependency CVE or a
+# project-wide finding is not anchored to a line, so "Propose fix" and
+# "Generate test" sent the model a prompt whose entire code block was the
+# literal string "(no source captured for this finding)" and spent a real
+# request being told INSUFFICIENT_CONTEXT.
+# --------------------------------------------------------------------------
+
+class RecordingProvider:
+    """Available, and records every prompt it is asked to complete."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    def status(self):
+        from app.ai.provider import AIStatus, ProviderState
+
+        return AIStatus(
+            configured=True,
+            available=True,
+            state=ProviderState.READY,
+            model="fake-model",
+        )
+
+    async def complete(self, prompt: str, *, system: str | None = None) -> str:
+        self.calls.append(prompt)
+        return "### What this is\nx\n\n### Why it matters here\ny\n\n### What to check\n- z"
+
+
+@pytest.fixture
+def recording_provider():
+    from app.ai.provider import provider_dependency
+    from app.routers import ai as ai_module
+
+    provider = RecordingProvider()
+    app.dependency_overrides[provider_dependency] = lambda: provider
+    ai_module._cache.clear()
+    yield provider
+    ai_module._cache.clear()
+    app.dependency_overrides.pop(provider_dependency, None)
+
+
+def _report_with(finding: Finding) -> Report:
+    report = make_report(report_id="r-ai")
+    return report.model_copy(update={"findings": [finding]})
+
+
+@pytest.mark.parametrize("action", ["propose_fix", "generate_test"])
+async def test_code_actions_refuse_a_finding_with_no_source(
+    in_memory, recording_provider, action
+):
+    """A dependency CVE has no file, so there is nothing to diff or test."""
+    finding = make_finding(
+        id="dep1",
+        rule_id="dependencies/known-vulnerability",
+        category=Category.DEPENDENCIES,
+        title="lodash 4.17.11 has a known vulnerability",
+    )
+    await in_memory.save(_report_with(finding))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/reports/r-ai/findings/dep1/ai", json={"action": action}
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "no_source_for_action"
+    # The point of the guard: no request was spent to learn this.
+    assert recording_provider.calls == []
+
+
+async def test_explain_still_works_without_source(in_memory, recording_provider):
+    """Explaining a CVE from its own description is a useful answer."""
+    finding = make_finding(
+        id="dep2",
+        rule_id="dependencies/known-vulnerability",
+        category=Category.DEPENDENCIES,
+        title="lodash 4.17.11 has a known vulnerability",
+    )
+    await in_memory.save(_report_with(finding))
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/reports/r-ai/findings/dep2/ai", json={"action": "explain"}
+        )
+
+    assert response.status_code == 200
+    assert len(recording_provider.calls) == 1
+
+
+async def test_code_actions_run_when_a_snippet_was_captured(
+    in_memory, recording_provider
+):
+    """The guard must not block ordinary findings, which carry a snippet."""
+    finding = make_finding(
+        id="sec1",
+        rule_id="js/sql-injection",
+        category=Category.SECURITY,
+        file="routes/login.ts",
+        line=34,
+        snippet='const q = "SELECT * FROM Users WHERE email = " + req.body.email;',
+        snippet_start_line=33,
+    )
+    await in_memory.save(_report_with(finding))
+
+    with TestClient(app) as client:
+        client.post(
+            "/api/reports/r-ai/findings/sec1/ai", json={"action": "propose_fix"}
+        )
+
+    assert len(recording_provider.calls) == 1, "guard blocked a workable finding"
