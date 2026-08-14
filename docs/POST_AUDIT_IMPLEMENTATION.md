@@ -205,9 +205,26 @@ with a documented edge.
 - **No cross-file taint tracking.** A value tainted in one module and used in
   another is not detected. The module says so in its docstring and the finding
   text says so to the reader.
-- **The unattributed backend latency is still unattributed.** `/api/reports`
-  costs ~1.3s more than `/api/health` warm, flat in row count. Isolating it
-  needs the Render host directly.
+- **Backend latency is now attributed, and half of it is gone.** With the
+  service's own hostname available it resolved cleanly: **one database query
+  costs ~1.35s**, it never warms across repeated requests, and the Vercel proxy
+  contributes nothing (direct and proxied calls land within 20ms).
+
+      /api/ping           0 queries    0.41s   <- pure round trip to Render
+      /api/reports        1 query      1.8s
+      /api/reports/{id}   2 queries    3.1s
+
+  Latency tracks the query *count*, which made the count the thing to attack.
+  `get_report` read the same row twice — `get()` then `owner_of()`, the first
+  already holding the `owner_id` it discarded. One round trip now, measured in
+  production at **3.1s → 1.64s**.
+
+  **Why a single query costs 1.35s is still open**, and it is the largest
+  remaining number in the system. It is per-query rather than
+  per-connection-burst, which points at the Render↔Neon link rather than at
+  anything in this repository — most likely the two are in different regions.
+  Checkable in the two dashboards, and if they differ, moving one is worth more
+  than any further query tuning.
 - **`PostgresReportStore.list` over-fetches** the full payload per row while
   three comments in that file claim it does not. Left alone: there is no
   Postgres-backed test, so the change would ship blind to the only environment
