@@ -64,9 +64,34 @@ def is_test_path(path: str) -> bool:
     return bool(_TEST_PATH.search(path))
 
 
+# Third-party code and build output. Not ours to fix, and usually minified —
+# a single line thousands of characters long, where any substring can look
+# like anything.
+#
+# `payatu/Tiredful-API` reported a SQL injection in
+# `static/rest_framework/docs/js/highlight.pack.js`, a vendored syntax
+# highlighter, and it led the report summary. Editing a vendored bundle is not
+# a fix, so a finding there is noise however true it is; the actionable version
+# of that problem is a dependency finding about the package.
+_VENDOR_PATH = re.compile(
+    r"(^|/)(vendor|vendors|third[-_]?party|node_modules|bower_components"
+    r"|dist|build|out|static|public|assets|site-packages)/"
+    r"|\.(?:min|pack|bundle|chunk)\.[jt]sx?$",
+    re.IGNORECASE,
+)
+
+
+def is_vendored(path: str) -> bool:
+    return bool(_VENDOR_PATH.search(path))
+
+
 def sources(ctx: RuleContext, *languages: str) -> list[SourceFile]:
-    """Analysable files in the given languages, tests excluded."""
-    return [s for s in ctx.snapshot.by_language(*languages) if not is_test_path(s.path)]
+    """Analysable files in the given languages, tests and vendored code out."""
+    return [
+        s
+        for s in ctx.snapshot.by_language(*languages)
+        if not is_test_path(s.path) and not is_vendored(s.path)
+    ]
 
 
 # --------------------------------------------------------------------------
@@ -120,7 +145,59 @@ def tainted(expr: str) -> bool:
     return bool(REQUEST_SOURCE.search(expr))
 
 
-def grade(expr: str) -> tuple[Severity, Confidence] | None:
+# Identifiers the expression interpolates: `${name}`, `{name}`, `% name`,
+# `+ name`, `.format(name)`. Deliberately loose — a name that turns out not to
+# be assigned from a request source simply does not match below.
+_INTERPOLATED = re.compile(
+    r"\$\{\s*([A-Za-z_]\w*)|\{\s*([A-Za-z_]\w*)\s*\}|"
+    r"%\s*\(?\s*([A-Za-z_]\w*)|\+\s*([A-Za-z_]\w*)|format\s*\(\s*([A-Za-z_]\w*)"
+)
+
+# How far back a variable's assignment may be. Four lines covers the shape
+# below without reaching across a function boundary in practice.
+_ASSIGNMENT_LOOKBACK = 4
+
+
+def tainted_via_local(source: SourceFile, number: int, expr: str) -> bool:
+    """Whether an interpolated *variable* was assigned from the request nearby.
+
+    The commonest real shape puts the taint one statement above the sink::
+
+        month_requested = request.data['month']
+        ...
+        Tracker.objects.raw('… where month=%s' % month_requested)
+
+    Confidence is deliberately graded on the statement alone, so that an
+    unrelated `req.query` three lines up cannot promote unproven evidence to a
+    CRITICAL finding. That guard is right and it is also why the case above was
+    missed on `payatu/Tiredful-API`, a deliberately vulnerable app.
+
+    The resolution is not a wider window but a narrower question: take the
+    identifiers this expression actually interpolates, and look for *those
+    names* being assigned from a request source. Unrelated taint on a
+    neighbouring line still cannot reach it, because the name has to match.
+    """
+    names = {g for match in _INTERPOLATED.finditer(expr) for g in match.groups() if g}
+    if not names:
+        return False
+
+    lines = source.lines()
+    start = max(0, number - 1 - _ASSIGNMENT_LOOKBACK)
+    for line in lines[start : number - 1]:
+        for name in names:
+            # `name = <something request-derived>`, not `name == …`.
+            assignment = re.search(rf"\b{re.escape(name)}\s*=(?!=)(.*)$", line)
+            if assignment and REQUEST_SOURCE.search(assignment.group(1)):
+                return True
+    return False
+
+
+def grade(
+    expr: str,
+    *,
+    source: SourceFile | None = None,
+    number: int | None = None,
+) -> tuple[Severity, Confidence] | None:
     """Severity/confidence for a sink reached by ``expr``, or ``None`` to skip.
 
     The three-way split every rule in this module shares:
@@ -132,6 +209,10 @@ def grade(expr: str) -> tuple[Severity, Confidence] | None:
     if not is_built(expr):
         return None
     if tainted(expr):
+        return Severity.CRITICAL, Confidence.HIGH
+    # The same value, assigned from the request a line or two above. Only the
+    # names this expression interpolates are followed — see `tainted_via_local`.
+    if source is not None and number is not None and tainted_via_local(source, number, expr):
         return Severity.CRITICAL, Confidence.HIGH
     return Severity.MEDIUM, Confidence.MEDIUM
 
@@ -273,7 +354,7 @@ class SqlInjectionRule:
                 # `${...}` three lines above belongs to different code, and
                 # grading on it would attribute someone else's taint to this
                 # statement and report MEDIUM evidence as a CRITICAL finding.
-                verdict = grade(_context(source, number, span=3))
+                verdict = grade(_context(source, number, span=3), source=source, number=number)
                 if verdict is None:
                     continue
                 # `db.query("SELECT … WHERE id = ?", [id])` is the fix, not the
@@ -351,7 +432,7 @@ class CommandInjectionRule:
                 if not match:
                     continue
                 window = _context(source, number)
-                verdict = grade(window)
+                verdict = grade(window, source=source, number=number)
                 if verdict is None:
                     continue
                 # `spawn`/`execFile` pass an argv array and do not involve a

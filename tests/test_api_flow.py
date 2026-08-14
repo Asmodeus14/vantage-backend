@@ -417,3 +417,105 @@ def test_unknown_job_stream_reports_failure_rather_than_hanging(in_memory):
 def test_job_status_polling_fallback(in_memory):
     with TestClient(app) as client:
         assert client.get("/api/analyze/unknown").json()["status"] == "unknown"
+
+
+# --------------------------------------------------------------------------
+# The summary sentence
+# --------------------------------------------------------------------------
+
+def test_summary_names_the_work_rather_than_the_weakest_category():
+    """It used to end "Dependencies is the weakest area (65/100 across 1
+    finding)" — a property of the scoring model, not an instruction. The
+    sentence is read in the report header, the pull request comment and the
+    `og:description` of a shared link, and all three want the same thing.
+    """
+    score = compute_score(
+        [
+            make_finding(
+                id="a",
+                category=Category.SECRET,
+                severity=Severity.CRITICAL,
+                title="AWS access key ID committed to the repository",
+                file="config/keys.js",
+                priority=100,
+            )
+        ],
+        120,
+    )
+    assert score.summary.startswith("Start with AWS access key ID")
+    assert "config/keys.js" in score.summary
+    assert "weakest area" not in score.summary
+
+
+def test_summary_keeps_an_acronym_capitalised():
+    """`title[0].lower()` produced "aWS access key ID" and "sQL statement"."""
+    from app.analysis.scoring import _decapitalise
+
+    assert _decapitalise("AWS access key ID committed") == "AWS access key ID committed"
+    assert _decapitalise("SQL statement assembled") == "SQL statement assembled"
+    assert _decapitalise("JWT claims read") == "JWT claims read"
+    assert _decapitalise("Shell command built") == "shell command built"
+
+
+def test_summary_counts_the_rest_without_listing_them():
+    score = compute_score(
+        [
+            make_finding(id=str(i), category=Category.SECURITY, severity=Severity.HIGH,
+                         title="Shell command built from an interpolated value",
+                         file=f"jobs/{i}.js", priority=90)
+            for i in range(3)
+        ],
+        120,
+    )
+    assert "then 2 other issues of the same kind" in score.summary
+
+
+def test_summary_will_not_name_an_unconfirmed_finding():
+    """Naming a finding puts it in the report header, the PR comment and the
+    preview card. Doing that for something the rules are unsure about is the
+    loudest possible place to be wrong."""
+    score = compute_score(
+        [
+            make_finding(
+                category=Category.SECURITY,
+                severity=Severity.CRITICAL,
+                confidence=Confidence.MEDIUM,
+                title="SQL statement assembled from an interpolated value",
+            )
+        ],
+        120,
+    )
+    assert "Start with" not in score.summary
+    assert "not confirmed" in score.summary
+
+
+def test_summary_says_nothing_blocking_without_claiming_safety():
+    """"Nothing blocking found" is defensible from a rule set with documented
+    limits. "Your app is secure" is not, and no wording here should imply it.
+    """
+    score = compute_score(
+        [
+            make_finding(
+                category=Category.METRIC,
+                severity=Severity.LOW,
+                title="app.ts is 1,200 lines long",
+            )
+        ],
+        120,
+    )
+    assert "Nothing blocking found" in score.summary
+    for overclaim in ("secure", "safe", "no vulnerabilities", "clean"):
+        assert overclaim not in score.summary.lower()
+
+
+def test_summary_ignores_an_accepted_finding():
+    """A suppressed finding is one the owner has already judged. Leading the
+    report with it would re-litigate that on every run."""
+    accepted = make_finding(
+        category=Category.SECRET,
+        severity=Severity.CRITICAL,
+        title="AWS access key ID committed to the repository",
+        priority=100,
+    )
+    accepted.suppressed = True
+    assert "Start with" not in compute_score([accepted], 120).summary

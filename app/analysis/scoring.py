@@ -174,27 +174,104 @@ def severity_counts(findings: list[Finding]) -> SeverityCounts:
     return counts
 
 
-def _summarise(value: int, categories: list[CategoryScore], counts: SeverityCounts) -> str:
+# Categories where a finding is work someone can do, as opposed to a
+# measurement or a judgement about style. The summary names one of these or it
+# names nothing.
+ACTIONABLE = frozenset(
+    {Category.SECRET, Category.SECURITY, Category.DEPENDENCIES, Category.CORRECTNESS}
+)
+
+
+def _decapitalise(title: str) -> str:
+    """Lower the first letter, unless it begins an acronym.
+
+    Rule titles start capitalised because they are titles. Dropping one into
+    mid-sentence needs it lowered — except that several begin with an acronym,
+    and a naive `title[0].lower()` produced "aWS access key ID committed to the
+    repository" and "sQL statement assembled from an interpolated value".
+
+    A second uppercase character means the first belongs to a word like AWS,
+    SQL, JWT or MD5, which keeps its case.
+    """
+    if len(title) < 2 or title[1].isupper():
+        return title
+    return title[0].lower() + title[1:]
+
+
+def _lead_finding(findings: list[Finding]) -> Finding | None:
+    """The one thing to do first, or nothing worth naming.
+
+    Confidence-gated: naming a finding puts it in the report header, the pull
+    request comment and the social preview card, and doing that for something
+    the rules are unsure about would be the loudest possible place to be wrong.
+    """
+    candidates = [
+        f
+        for f in findings
+        if f.category in ACTIONABLE
+        and f.confidence is Confidence.HIGH
+        and f.severity in {Severity.CRITICAL, Severity.HIGH}
+        and not f.suppressed
+    ]
+    return max(candidates, key=lambda f: f.priority, default=None)
+
+
+def _summarise(
+    value: int,
+    categories: list[CategoryScore],
+    counts: SeverityCounts,
+    findings: list[Finding],
+) -> str:
+    """One sentence, and it has to earn its place.
+
+    This used to end with "Dependencies is the weakest area (65/100 across 1
+    finding)". That is a property of the scoring model, not an instruction —
+    it tells a reader which bucket the arithmetic disliked, not what to do. The
+    sentence is read in three places that all want the same thing: the report
+    header, the pull request comment, and the `og:description` of a shared
+    link.
+
+    So it names the work when there is work, and says so plainly when there is
+    not. What it must never do is claim safety: "nothing blocking found" is
+    defensible from a rule set with documented limits, "your app is secure" is
+    not, and no wording here should imply the second.
+    """
     if counts.total == 0:
         return "No issues detected across the rules that applied to this project."
 
-    weakest = min(categories, key=lambda c: c.score) if categories else None
+    lead = _lead_finding(findings)
+
+    if lead is not None:
+        others = sum(
+            1
+            for f in findings
+            if f is not lead
+            and f.category in ACTIONABLE
+            and f.confidence is Confidence.HIGH
+            and f.severity in {Severity.CRITICAL, Severity.HIGH}
+            and not f.suppressed
+        )
+        where = f" in {lead.file}" if lead.file else ""
+        tail = (
+            f", then {others} other issue{'s' if others != 1 else ''} of the same kind"
+            if others
+            else ""
+        )
+        return f"Start with {_decapitalise(lead.title)}{where}{tail}."
+
+    # Nothing proven and serious. Say what was found rather than what the
+    # scoring model thought of it.
     blocking = counts.critical + counts.high
-
     if blocking:
-        lead = (
-            f"{blocking} issue{'s' if blocking != 1 else ''} "
-            f"need{'' if blocking != 1 else 's'} attention first"
-        )
-    else:
-        lead = "No critical or high-severity issues"
-
-    if weakest and weakest.findings:
         return (
-            f"{lead}. {weakest.category.value.title()} is the weakest area "
-            f"({weakest.score}/100 across {weakest.findings} finding"
-            f"{'s' if weakest.findings != 1 else ''})."
+            f"{blocking} finding{'s' if blocking != 1 else ''} of high severity, "
+            f"{'none of them confirmed' if blocking != 1 else 'not confirmed'} — "
+            "worth reviewing before acting."
         )
+    return (
+        f"Nothing blocking found. {counts.total} lower-severity "
+        f"finding{'s' if counts.total != 1 else ''} to look at when convenient."
+    )
     return f"{lead}."
 
 
@@ -225,5 +302,5 @@ def compute_score(findings: list[Finding], analysed_files: int) -> Score:
         value=max(0, min(100, value)),
         grade=grade_for(value),
         categories=categories,
-        summary=_summarise(value, scored, counts),
+        summary=_summarise(value, scored, counts, findings),
     )

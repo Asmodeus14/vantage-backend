@@ -29,6 +29,7 @@ from app.analysis.rules.security import (
     WeakHashRule,
     is_built,
     is_test_path,
+    is_vendored,
     tainted,
 )
 from app.config import Settings
@@ -573,3 +574,118 @@ async def test_verify_false_with_jwt_in_view_is_still_caught(tmp_path):
         {"auth.py": "import jwt\nclaims = jwt.decode(token, verify=False)\n"},
     )
     assert len(findings) == 1
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "static/rest_framework/docs/js/highlight.pack.js",
+        "vendor/jquery.js",
+        "node_modules/lib/index.js",
+        "dist/app.bundle.js",
+        "public/js/analytics.min.js",
+        "src/vendor/chart.js",
+    ],
+)
+def test_vendored_and_built_files_are_out_of_scope(path):
+    """Not ours to fix, and usually minified.
+
+    `payatu/Tiredful-API` reported a SQL injection in a vendored syntax
+    highlighter, and it led the report summary. Editing a vendored bundle is
+    not a fix — the actionable version of that problem is a dependency finding
+    about the package.
+    """
+    assert is_vendored(path) is True
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["src/api/users.js", "app/routes/static_pages.py", "lib/distance.ts", "app/public_api.py"],
+)
+def test_ordinary_source_is_not_mistaken_for_vendored(path):
+    """The markers are path segments and suffixes, not substrings — `distance`
+    must not match `dist`, nor `public_api` match `public`."""
+    assert is_vendored(path) is False
+
+
+async def test_a_vulnerability_in_a_vendored_bundle_is_not_reported(tmp_path):
+    findings = await run(
+        SqlInjectionRule(),
+        tmp_path,
+        {
+            "static/js/highlight.pack.js": (
+                "const sql = `SELECT * FROM t WHERE id = ${req.query.id}`;\n"
+                "db.query(sql);\n"
+            ),
+            "src/api/users.js": (
+                "const sql = `SELECT * FROM t WHERE id = ${req.query.id}`;\n"
+                "db.query(sql);\n"
+            ),
+        },
+    )
+    assert [f.file for f in findings] == ["src/api/users.js"]
+
+
+async def test_taint_assigned_a_few_lines_above_is_followed(tmp_path):
+    """The commonest real shape, missed until a corpus scan found it.
+
+    `payatu/Tiredful-API` — deliberately vulnerable — assigns
+    `month_requested = request.data['month']` and interpolates it into a raw
+    query three lines later. Grading on the statement alone reported it at
+    MEDIUM, so it did not cap the score of a knowingly-vulnerable app.
+    """
+    findings = await run(
+        SqlInjectionRule(),
+        tmp_path,
+        {
+            "views.py": (
+                "def get_activity(request):\n"
+                "    month_requested = request.data['month']\n"
+                "    try:\n"
+                "        rows = Tracker.objects.raw(\n"
+                "            'Select * from health_tracker where month=%s' % month_requested)\n"
+            )
+        },
+    )
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.HIGH
+    assert findings[0].severity is Severity.CRITICAL
+
+
+async def test_an_unrelated_tainted_variable_does_not_escalate(tmp_path):
+    """The name has to match.
+
+    This is why the fix is a narrower question rather than a wider window: a
+    `req.query` on a neighbouring line, assigned to a variable this statement
+    never uses, must still leave the finding at MEDIUM.
+    """
+    findings = await run(
+        SqlInjectionRule(),
+        tmp_path,
+        {
+            "h.js": (
+                "const name = req.query.name;\n"
+                "log(name);\n"
+                "const sql = `SELECT * FROM audit WHERE actor = ${INTERNAL_ACTOR}`;\n"
+                "await db.query(sql);\n"
+            )
+        },
+    )
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.MEDIUM
+
+
+async def test_a_locally_assigned_constant_does_not_escalate(tmp_path):
+    findings = await run(
+        SqlInjectionRule(),
+        tmp_path,
+        {
+            "h.js": (
+                "const actor = 'system';\n"
+                "const sql = `SELECT * FROM audit WHERE actor = ${actor}`;\n"
+                "await db.query(sql);\n"
+            )
+        },
+    )
+    assert len(findings) == 1
+    assert findings[0].confidence is Confidence.MEDIUM

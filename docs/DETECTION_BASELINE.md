@@ -58,23 +58,29 @@ positive on real code is what makes people stop trusting a scanner.
 
 Security and secret findings, before and after the fixes below.
 
-| repository | before | after |
-|---|---|---|
-| `hagopj13/node-express-boilerplate` | 3 | **0** |
-| `pallets-eco/flask-security` | 11 | **6** |
-| `juice-shop/juice-shop` | 76 | 76 |
-| `miguelgrinberg/microblog` | 5 | 5 |
-| `appsecco/dvna` | 3 | 3 |
-| `payatu/Tiredful-API` | 3 | 3 |
-| `nVisium/django.nV` | 2 | 2 |
-| `santiq/bulletproof-nodejs` | 0 | 0 |
-| `steven-tey/precedent` | 0 | 0 |
-| `realpython/flask-boilerplate` | 0 | 0 |
-| **total** | **103** | **95** |
+| repository | before | after | score after |
+|---|---|---|---|
+| `hagopj13/node-express-boilerplate` | 3 | **0** | 100 A |
+| `pallets-eco/flask-security` | 11 | **6** | 39 F |
+| `juice-shop/juice-shop` | 76 | **67** | 39 F |
+| `payatu/Tiredful-API` | 3 | **1** | 39 F |
+| `nVisium/django.nV` | 2 | **1** | 85 B |
+| `miguelgrinberg/microblog` | 5 | 5 | 78 C |
+| `appsecco/dvna` | 3 | 3 | 39 F |
+| `santiq/bulletproof-nodejs` | 0 | 0 | 97 A |
+| `steven-tey/precedent` | 0 | 0 | 94 A |
+| `realpython/flask-boilerplate` | 0 | 0 | 96 A |
+| **total** | **103** | **83** | |
 
-Every removed finding was a false positive on an ordinary application. **No
-finding was lost on any vulnerable application.** `node-express-boilerplate`
-went from 69 D to 100 A, which is the correct score for it.
+Twenty findings removed, **every one a false positive**, and no true positive
+lost anywhere. `node-express-boilerplate` went from 69 D to 100 A, which is the
+correct score for it.
+
+The reductions on the *vulnerable* repositories are vendored code, not missed
+vulnerabilities — `Tiredful-API` dropped a finding in a bundled syntax
+highlighter and one in `coreapi-0.1.0.js`, `django.nV` one in a jQuery
+datepicker. `Tiredful-API` still scores 39 F, now on the strength of the real
+SQL injection in `health/views.py` rather than a bundle nobody would edit.
 
 ---
 
@@ -120,6 +126,41 @@ word list is deliberately not applied to provider-shaped matches — it would
 discard a real key containing a word like "test" — but that reasoning is about
 the *value*. An `example:` key on the line above is a statement about the
 value's purpose, and no real credential is introduced that way.
+
+### A vulnerability inside a vendored bundle
+
+`payatu/Tiredful-API` reported SQL injection in
+`static/rest_framework/docs/js/highlight.pack.js` — a bundled syntax
+highlighter — and it *led the report summary*. Minified third-party code is a
+single line thousands of characters long, where any substring can look like
+anything, and editing a vendored bundle is not a fix in any case. The
+actionable version of that problem is a dependency finding about the package.
+
+The security rules now skip `vendor/`, `node_modules/`, `dist/`, `build/`,
+`static/`, `public/`, `assets/` and `.min`/`.pack`/`.bundle`/`.chunk` files.
+Tested against paths that must *not* match: `lib/distance.ts` is not `dist/`,
+and `app/public_api.py` is not `public/`.
+
+### And one recall gap, found the same way
+
+Grading confidence on the statement alone is deliberate — it stops an
+unrelated `req.query` three lines up from promoting unproven evidence to a
+CRITICAL finding. It also meant the commonest real shape was missed:
+
+```python
+month_requested = request.data['month']
+...
+Tracker.objects.raw('… where month=%s' % month_requested)
+```
+
+`Tiredful-API` scored 85 B on a knowingly-vulnerable app because that read as
+MEDIUM. The fix is not a wider window but a narrower question: take the
+identifiers the statement actually interpolates, and look for *those names*
+being assigned from a request source within four lines. Unrelated taint on a
+neighbouring line still cannot reach it, because the name has to match — and
+that case has its own test.
+
+It now scores 39 F, named on the real injection in `health/views.py`.
 
 ---
 
