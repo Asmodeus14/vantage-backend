@@ -113,6 +113,48 @@ def category_score(
     )
 
 
+# A weighted average across categories describes how *broadly* a codebase is
+# in good shape. It is a poor description of how *dangerous* it is, and the two
+# get confused because they share a number.
+#
+# Measured on a sample app with two proven SQL injections, a command injection,
+# an SSRF and an unverified JWT: it scored 80, a B. Not a bug in the average —
+# eight other categories legitimately scored 100 and outvoted the one that
+# mattered. But a product whose whole claim is "tells you what needs your
+# attention" cannot hand that codebase a B.
+#
+# So the average is a ceiling, not the answer. A proven, exploitable finding in
+# first-party code caps the grade regardless of how clean everything else is.
+SEVERITY_CAP: dict[Severity, int] = {
+    Severity.CRITICAL: 39,  # F
+    Severity.HIGH: 69,      # D
+}
+
+# Only these cap. A critical CVE in a transitive dependency is serious but
+# frequently unreachable, and capping on it would push every project with an
+# ageing lockfile to F — at which point the score stops discriminating, which
+# is the exact failure the current model was built to avoid.
+CAPPING_CATEGORIES = frozenset({Category.SECURITY, Category.SECRET})
+
+
+def _cap(findings: list[Finding]) -> int:
+    """The lowest ceiling any single finding imposes.
+
+    Confidence-gated: only findings the rules are sure about cap the score.
+    The security rules emit CRITICAL at HIGH confidence exactly when taint is
+    proven and downgrade to MEDIUM when it is not, so this rides on a
+    distinction that is already made carefully rather than inventing one.
+    """
+    ceiling = 100
+    for finding in findings:
+        if finding.category not in CAPPING_CATEGORIES:
+            continue
+        if finding.confidence is not Confidence.HIGH:
+            continue
+        ceiling = min(ceiling, SEVERITY_CAP.get(finding.severity, 100))
+    return ceiling
+
+
 def grade_for(value: int) -> str:
     if value >= 90:
         return "A"
@@ -173,6 +215,8 @@ def compute_score(findings: list[Finding], analysed_files: int) -> Score:
         c.score * POLICIES.get(c.category, DEFAULT_POLICY).weight for c in categories
     )
     value = round(weighted / total_weight) if total_weight else 100
+    # The average is the ceiling, not the answer.
+    value = min(value, _cap(findings))
 
     counts = severity_counts(findings)
     scored = [c for c in categories if c.category in present] or categories

@@ -241,3 +241,80 @@ def test_every_category_has_a_scoring_policy_or_a_deliberate_default(category):
     """Catches a new category being added without anyone deciding what it is
     worth — the failure mode this whole slice exists to prevent."""
     assert category in POLICIES, f"{category} has no scoring policy"
+
+
+# --------------------------------------------------------------------------
+# A proven exploitable finding caps the grade
+# --------------------------------------------------------------------------
+
+def test_a_proven_critical_security_finding_caps_the_score():
+    """Found by exporting a real analysis, not by reading the model.
+
+    A sample app with two proven SQL injections, a command injection, an SSRF
+    and an unverified JWT scored 80 — a B — because eight other categories
+    legitimately scored 100 and outvoted the one that mattered.
+    """
+    findings = [
+        finding(
+            category=Category.SECURITY,
+            severity=Severity.CRITICAL,
+            confidence=Confidence.HIGH,
+        )
+    ]
+    score = compute_score(findings, analysed_files=200)
+    assert score.value <= 39
+    assert score.grade == "F"
+
+
+def test_a_proven_high_severity_finding_caps_lower_but_not_to_f():
+    score = compute_score(
+        [
+            finding(
+                category=Category.SECURITY,
+                severity=Severity.HIGH,
+                confidence=Confidence.HIGH,
+            )
+        ],
+        analysed_files=200,
+    )
+    assert score.value <= 69
+
+
+def test_an_unproven_finding_does_not_cap():
+    """The cap rides on a distinction the rules already make carefully: they
+    emit CRITICAL at HIGH confidence when taint is proven and downgrade to
+    MEDIUM when it is not. Capping on a guess would make the score
+    unfalsifiable."""
+    score = compute_score(
+        [
+            finding(
+                category=Category.SECURITY,
+                severity=Severity.CRITICAL,
+                confidence=Confidence.MEDIUM,
+            )
+        ],
+        analysed_files=200,
+    )
+    assert score.value > 39
+
+
+def test_a_dependency_cve_does_not_cap():
+    """A critical CVE in a transitive dependency is serious but frequently
+    unreachable. Capping on it would push every project with an ageing
+    lockfile to F, at which point the score stops discriminating — the exact
+    failure the scoring model was built to avoid."""
+    score = compute_score(
+        [
+            finding(
+                category=Category.DEPENDENCIES,
+                severity=Severity.CRITICAL,
+                confidence=Confidence.HIGH,
+            )
+        ],
+        analysed_files=200,
+    )
+    assert score.value > 39
+
+
+def test_a_clean_project_is_unaffected_by_the_cap():
+    assert compute_score([], analysed_files=200).value == 100
