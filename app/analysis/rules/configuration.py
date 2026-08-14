@@ -123,6 +123,7 @@ class NoTestsRule:
             ctx.finding(
                 rule_id=self.id,
                 title="No test files found",
+                references=["https://docs.pytest.org/en/stable/", "https://vitest.dev/guide/"],
                 description=(
                     "No files matching common test conventions were found. "
                     "Without tests, every change is verified by hand and "
@@ -156,6 +157,7 @@ class NoCiRule:
             ctx.finding(
                 rule_id=self.id,
                 title="No CI pipeline configured",
+                references=["https://docs.github.com/en/actions/writing-workflows/quickstart"],
                 description=(
                     "No CI configuration was found. Tests and linting that only "
                     "run locally get skipped under deadline pressure."
@@ -196,6 +198,7 @@ class NoTypeScriptStrictRule:
                     ctx.finding(
                         rule_id=self.id,
                         title="TypeScript strict mode is disabled",
+                        references=["https://www.typescriptlang.org/tsconfig/#strict"],
                         description=(
                             "With strict off, null and undefined are assignable "
                             "everywhere and implicit any is permitted, which "
@@ -217,6 +220,7 @@ class NoTypeScriptStrictRule:
                     ctx.finding(
                         rule_id=self.id,
                         title="TypeScript strict mode is not enabled",
+                        references=["https://www.typescriptlang.org/tsconfig/#strict"],
                         description=(
                             "tsconfig.json does not set `strict`, so it "
                             "defaults to false and most type guarantees are off."
@@ -248,6 +252,7 @@ class NoReadmeRule:
             ctx.finding(
                 rule_id=self.id,
                 title="No README found",
+                references=["https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-readmes"],
                 description=(
                     "A README is the first thing a new contributor reads. "
                     "Without it, setup knowledge lives only in people's heads."

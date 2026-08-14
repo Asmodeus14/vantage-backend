@@ -161,6 +161,7 @@ class ArrayIndexKeyRule:
                         ctx.finding(
                             rule_id=self.id,
                             title="Array index used as a React key",
+                            references=["https://react.dev/learn/rendering-lists#why-does-react-need-keys"],
                             description=(
                                 "An index key changes meaning whenever the list "
                                 "is reordered or an item is inserted, which "

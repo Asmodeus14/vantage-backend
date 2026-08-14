@@ -512,6 +512,7 @@ class MissingLockfileRule:
             ctx.finding(
                 rule_id=self.id,
                 title="No dependency lockfile committed",
+                references=["https://docs.npmjs.com/cli/v10/configuring-npm/package-lock-json"],
                 description=(
                     "Without a lockfile, installs resolve version ranges "
                     "differently over time and across machines, so builds are "
@@ -566,6 +567,7 @@ class ReactVersionMismatchRule:
                 ctx.finding(
                     rule_id=self.id,
                     title="react and react-dom are on different major versions",
+                    references=["https://react.dev/versions"],
                     description=(
                         f"react resolves to {react_v} but react-dom resolves to "
                         f"{dom_v}. These packages share internal APIs and must "

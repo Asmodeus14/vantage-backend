@@ -95,6 +95,7 @@ class LongFileRule:
                     # and reappear on every edit.
                     key=source.path,
                     title=f"{source.name} is {count:,} lines long",
+                    references=["https://refactoring.com/catalog/extractClass.html"],
                     description=(
                         f"Files above roughly {LONG_FILE_LINES} lines tend to "
                         f"hold several unrelated responsibilities, which makes "
@@ -167,6 +168,7 @@ class LongFunctionRule:
                     # across files.
                     key=f"{source.path}|{name}",
                     title=f"{name}() spans {length} lines",
+                    references=["https://refactoring.com/catalog/extractFunction.html"],
                         description=(
                             "A function this long usually has several distinct "
                             "jobs and many branches, which makes each path hard "
@@ -265,6 +267,7 @@ class DeepNestingRule:
                         # moves, without the file becoming a different problem.
                         key=source.path,
                         title=f"{source.name} nests {worst} levels deep",
+                        references=["https://refactoring.com/catalog/replaceNestedConditionalWithGuardClauses.html"],
                         description=(
                             "Deep nesting forces a reader to hold several "
                             "conditions in mind at once and is strongly "

@@ -306,6 +306,7 @@ class BareExceptRule:
                     ctx.finding(
                         rule_id=self.id,
                         title="Bare `except:` catches everything",
+                        references=["https://peps.python.org/pep-0008/#programming-recommendations"],
                         description=(
                             "A bare except also catches KeyboardInterrupt and "
                             "SystemExit, so it swallows Ctrl-C and a request to "
