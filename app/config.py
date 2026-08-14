@@ -42,10 +42,24 @@ class Settings(BaseSettings):
     # Free-tier quota is allocated per model, not per key — an exhausted model
     # returns 429 while a sibling still serves. Keep this configurable so an
     # operator can switch buckets without a code change.
-    gemini_model: str = "gemini-3.6-flash"
-    # Current flash models reason before answering; a real analysis prompt takes
-    # far longer than a trivial one. 30s was measured to be too tight.
-    ai_timeout_seconds: float = 90.0
+    # Measured on the real prompts (see docs/AI_LATENCY.md): flash-lite answers
+    # in ~1.5s where 3.6-flash took 5-42s for comparable output, and it was the
+    # only model that never failed across a testing session in which 3.6-flash
+    # returned 503 twice and timed out three times.
+    gemini_model: str = "gemini-3.5-flash-lite"
+    # Tried in order when the primary fails transiently. A different model is
+    # often a different capacity pool, so a 503 on one is not a 503 on the next.
+    # Kept as a full-strength model: it is more willing to refuse on incomplete
+    # context, which is the safer behaviour to fall back *to*.
+    gemini_fallback_models: str = "gemini-3.6-flash"
+    # Per attempt, not per request. Current flash models reason before
+    # answering; a real analysis prompt takes far longer than a trivial one, and
+    # 30s was measured to be too tight for 3.6-flash (41.7s observed, succeeding).
+    ai_timeout_seconds: float = 45.0
+    # The primary fails fast so the fallback fires while the user is still
+    # waiting. flash-lite's slowest measured response was 2.2s, so this is ~7x
+    # headroom: if it is not answering by now, another model is the better bet.
+    ai_primary_timeout_seconds: float = 15.0
     # After this many consecutive provider failures the circuit opens and we stop
     # issuing calls until the cooldown elapses. Prevents a rate-limited key from
     # being hammered — the failure mode that drained quota in v2.
@@ -104,6 +118,20 @@ class Settings(BaseSettings):
     @property
     def ai_configured(self) -> bool:
         return bool(self.gemini_api_key)
+
+    @property
+    def model_chain(self) -> tuple[str, ...]:
+        """Models to try in order, primary first, de-duplicated.
+
+        Configured as a comma-separated string so the whole routing policy can
+        be changed with one environment variable and no redeploy of code.
+        """
+        chain: list[str] = [self.gemini_model]
+        for name in self.gemini_fallback_models.split(","):
+            candidate = name.strip()
+            if candidate and candidate not in chain:
+                chain.append(candidate)
+        return tuple(chain)
 
     @property
     def db_configured(self) -> bool:

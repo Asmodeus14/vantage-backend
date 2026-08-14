@@ -262,3 +262,211 @@ def test_ai_status_payload_is_json_safe():
         "reason",
         "retry_after_seconds",
     }
+
+
+# --------------------------------------------------------------------------
+# Model routing
+#
+# Measured on the real prompts: flash-lite answers in ~1.5s where 3.6-flash
+# took 5-42s, and in one testing session 3.6-flash returned 503 twice and timed
+# out three times while flash-lite never failed. Routing exists because a 503
+# is a statement about one model's capacity, not about the request.
+# --------------------------------------------------------------------------
+
+def routing_settings(**overrides) -> Settings:
+    return make_settings(
+        gemini_model="primary-model",
+        gemini_fallback_models="fallback-model",
+        **overrides,
+    )
+
+
+def routing_client(behaviour: dict[str, object]):
+    """Client whose response depends on which model was asked, recording order."""
+
+    calls: list[str] = []
+
+    async def generate_content(*, model, **kwargs):
+        calls.append(model)
+        outcome = behaviour[model]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return types.SimpleNamespace(text=outcome)
+
+    client = types.SimpleNamespace(
+        aio=types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content=generate_content)
+        )
+    )
+    return client, calls
+
+
+def streaming_client(behaviour: dict[str, object]):
+    calls: list[str] = []
+
+    async def generate_content_stream(*, model, **kwargs):
+        calls.append(model)
+
+        async def chunks():
+            for item in behaviour[model]:
+                if isinstance(item, Exception):
+                    raise item
+                yield types.SimpleNamespace(text=item)
+
+        return chunks()
+
+    client = types.SimpleNamespace(
+        aio=types.SimpleNamespace(
+            models=types.SimpleNamespace(generate_content_stream=generate_content_stream)
+        )
+    )
+    return client, calls
+
+
+async def test_transient_failure_routes_to_the_next_model():
+    """A 503 on the primary is exactly what the fallback is for."""
+    provider = GeminiProvider(routing_settings())
+    provider._client, calls = routing_client(
+        {"primary-model": ApiError(503), "fallback-model": "answered anyway"}
+    )
+
+    assert await provider.complete("hi") == "answered anyway"
+    assert calls == ["primary-model", "fallback-model"]
+
+
+async def test_one_model_failing_does_not_count_against_the_breaker():
+    """Otherwise a flaky primary opens the circuit on a chain that still serves."""
+    provider = GeminiProvider(routing_settings(ai_circuit_failure_threshold=2))
+    provider._client, _ = routing_client(
+        {"primary-model": ApiError(503), "fallback-model": "fine"}
+    )
+
+    for _ in range(5):
+        assert await provider.complete("hi") == "fine"
+
+    assert provider.status().available is True
+
+
+async def test_fatal_failure_does_not_spend_a_fallback_request():
+    """A rejected key fails identically on every model — retrying wastes quota."""
+    provider = GeminiProvider(routing_settings())
+    provider._client, calls = routing_client(
+        {"primary-model": ApiError(429), "fallback-model": "unused"}
+    )
+
+    with pytest.raises(AIUnavailableError):
+        await provider.complete("hi")
+
+    assert calls == ["primary-model"]
+    assert "quota" in (provider.status().reason or "").lower()
+
+
+async def test_unreachable_model_is_skipped_on_subsequent_calls():
+    """A 404 is permanent for that model; re-probing it costs a request per call."""
+    provider = GeminiProvider(routing_settings())
+    provider._client, calls = routing_client(
+        {"primary-model": ApiError(404), "fallback-model": "served"}
+    )
+
+    assert await provider.complete("one") == "served"
+    assert await provider.complete("two") == "served"
+
+    assert calls == ["primary-model", "fallback-model", "fallback-model"]
+
+
+async def test_every_model_unreachable_latches():
+    """Nothing left to route to is a configuration error, and will not self-heal."""
+    provider = GeminiProvider(routing_settings())
+    provider._client, _ = routing_client(
+        {"primary-model": ApiError(404), "fallback-model": ApiError(404)}
+    )
+
+    with pytest.raises(AIUnavailableError):
+        await provider.complete("hi")
+
+    status = provider.status()
+    assert status.available is False
+    assert "not available" in (status.reason or "").lower()
+
+
+async def test_chain_exhaustion_counts_once_not_once_per_model():
+    provider = GeminiProvider(routing_settings(ai_circuit_failure_threshold=2))
+    provider._client, _ = routing_client(
+        {"primary-model": ApiError(503), "fallback-model": ApiError(503)}
+    )
+
+    with pytest.raises(AIUnavailableError):
+        await provider.complete("hi")
+    # One exhausted chain is one failure, so the breaker is not yet open.
+    assert provider.status().available is True
+
+    with pytest.raises(AIUnavailableError):
+        await provider.complete("hi")
+    assert provider.status().available is False
+
+
+async def test_upstream_outage_reason_tells_the_user_to_retry():
+    provider = GeminiProvider(routing_settings())
+    provider._client, _ = routing_client(
+        {"primary-model": ApiError(503), "fallback-model": ApiError(503)}
+    )
+
+    with pytest.raises(AIUnavailableError) as exc:
+        await provider.complete("hi")
+
+    assert "try again" in (exc.value.detail or "").lower()
+
+
+def test_primary_timeout_never_exceeds_the_configured_ceiling():
+    """Lowering ai_timeout_seconds must tighten every attempt, including the first."""
+    provider = GeminiProvider(routing_settings(ai_timeout_seconds=0.05))
+    assert provider._attempts()[0].timeout == 0.05
+
+
+def test_primary_fails_faster_than_the_fallback_by_default():
+    """Asserted against the shipped defaults, not the helper's tighter override.
+
+    ``_env_file=None`` because a developer's local .env sets GEMINI_MODEL, and
+    this test is about what the defaults ship as.
+    """
+    provider = GeminiProvider(Settings(gemini_api_key="test-key", _env_file=None))
+    primary, fallback = provider._attempts()
+    assert primary.timeout < fallback.timeout
+
+
+def test_model_chain_dedupes_and_ignores_blanks():
+    settings = make_settings(
+        gemini_model="a", gemini_fallback_models=" b , , a ,c "
+    )
+    assert settings.model_chain == ("a", "b", "c")
+
+
+async def test_stream_routes_before_any_text_is_emitted():
+    provider = GeminiProvider(routing_settings())
+    provider._client, calls = streaming_client(
+        {"primary-model": [ApiError(503)], "fallback-model": ["he", "llo"]}
+    )
+
+    chunks = [chunk async for chunk in provider.stream("hi")]
+
+    assert "".join(chunks) == "hello"
+    assert calls == ["primary-model", "fallback-model"]
+
+
+async def test_stream_does_not_restart_after_emitting_text():
+    """Restarting mid-stream would splice two different answers together."""
+    provider = GeminiProvider(routing_settings())
+    provider._client, calls = streaming_client(
+        {
+            "primary-model": ["partial answer", ApiError(503)],
+            "fallback-model": ["a different answer"],
+        }
+    )
+
+    received: list[str] = []
+    with pytest.raises(AIUnavailableError):
+        async for chunk in provider.stream("hi"):
+            received.append(chunk)
+
+    assert received == ["partial answer"]
+    assert calls == ["primary-model"]
