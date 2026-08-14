@@ -67,6 +67,39 @@ def test_the_deploy_runs_a_single_worker(start_command):
     )
 
 
+def test_every_environment_specific_setting_is_declared_in_the_blueprint():
+    """A setting whose default only makes sense on a laptop has to be declared.
+
+    `APP_BASE_URL` defaults to `http://localhost:3000`. It was added for the
+    pull request comment and never added here, so in production the comment
+    would have embedded a localhost link into someone's pull request — working
+    perfectly in every test and being useless to every reader.
+
+    The rule is mechanical on purpose: a default of `None` gates a feature off,
+    and a default pointing at localhost is a development convenience. Either
+    way the deployed service needs to be told, so the blueprint must name it.
+    Values may still be `sync: false` — the point is that the variable is
+    *declared*, not that its value lives in the file.
+    """
+    from app.config import Settings
+
+    text = RENDER_YAML.read_text(encoding="utf-8")
+    declared = set(re.findall(r"-\s*key:\s*([A-Z_0-9]+)", text))
+
+    needs_declaring = {
+        name.upper()
+        for name, field in Settings.model_fields.items()
+        if field.default is None
+        or (isinstance(field.default, str) and "localhost" in field.default)
+    }
+
+    missing = sorted(needs_declaring - declared)
+    assert not missing, (
+        "environment-specific settings absent from render.yaml, so the "
+        f"deployed service silently uses a development default: {missing}"
+    )
+
+
 def test_migrations_run_before_the_server_starts(start_command):
     """A server that boots before its schema is migrated serves errors from a
     table that is about to exist."""

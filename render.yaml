@@ -37,6 +37,12 @@ services:
       # Analysis holds an extracted repository on disk; give it room.
       - key: MAX_EXTRACTED_BYTES
         value: "524288000"
+      # Where a report lives, for links this service publishes elsewhere — the
+      # pull request comment embeds it. Not a secret, so it is stated here
+      # rather than left to the dashboard: unset, it falls back to
+      # http://localhost:3000 and posts a localhost link into someone's PR.
+      - key: APP_BASE_URL
+        value: https://vantage67.vercel.app
       # Set these in the Render dashboard, not here.
       - key: GEMINI_API_KEY
         sync: false
